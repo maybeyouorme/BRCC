@@ -1,0 +1,9 @@
+.vscode/
+new_train/
+__pycache__/
+.idea/
+checkpoits*/
+*.png
+*.pdf
+readme.txt
+**/checkpoits*/
