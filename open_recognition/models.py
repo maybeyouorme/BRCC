@@ -76,30 +76,37 @@ class CenterLoss(nn.Module):
     def forward(self, x, labels):
         batch_size = x.size(0)
         # 计算欧氏距离平方: (x - centers)^2 = x^2 + centers^2 - 2*x*centers
+        #[B,D], [C,D] -> [B,C]
         distmat = torch.pow(x, 2).sum(dim=1, keepdim=True) + \
-                  torch.pow(self.centers, 2).sum(dim=1, keepdim=True).t()
-        distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)
-        classes = torch.arange(self.num_classes).long().to(self.device)
-        labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)
-        mask = labels.eq(classes.expand(batch_size, self.num_classes))
-        dist = distmat * mask.float()
+                  torch.pow(self.centers, 2).sum(dim=1, keepdim=True).t()#[B,1] + [C,1].T -> [B,C]
+        distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)#[B,C]
+        classes = torch.arange(self.num_classes).long().to(self.device)#[C]
+        labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)#[B, C]
+        mask = labels.eq(classes.expand(batch_size, self.num_classes))#[B, C]
+        dist = distmat * mask.float()# 只保留样本到对应类的距离
         loss = dist.clamp(min=1e-12, max=1e+12).sum() / batch_size
         return loss
 # 2. 编码器 (Encoder) - 保持不变 (只使用 time-domain x_time)
 class DeepResNet1DEncoder(nn.Module):
+    #x_time:[64,1,8192]-->[64,128]
     def __init__(self, in_ch=1, base_channels=64, layers=[2, 2, 2], out_dim=128):
         super().__init__()
         self.in_conv = nn.Sequential(
             nn.Conv1d(in_ch, base_channels, kernel_size=7, stride=2, padding=3, bias=False), # L -> L/2
             nn.BatchNorm1d(base_channels),
-            nn.ReLU(inplace=True)
-        )       
+            nn.ReLU(inplace=True)#[64,64,4096]
+        )     
         self.in_channels = base_channels      
         self.stage1 = self._make_layer(ResidualBlock1D, base_channels, layers[0], stride=1)
+        #1个stage2个残差块，共4层卷积，[64,64,4096] 
+
         self.stage2 = self._make_layer(ResidualBlock1D, base_channels * 2, layers[1], stride=2) # L/2 -> L/4
+        #2个残差块，共4层卷积，第1个块进行一次下采样
+        #[64,128,2048]
+
         #self.stage3 = self._make_layer(ResidualBlock1D, base_channels * 4, layers[2], stride=2) # L/4 -> L/8
-        final_channels = base_channels * 2 # 256
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        final_channels = base_channels * 2 # 128（x4:256）
+        self.pool = nn.AdaptiveAvgPool1d(1)# [64,128,1]-->[64,128]
         self.fc = nn.Linear(final_channels, out_dim)
 
     def _make_layer(self, block, channels, blocks, stride=1):
@@ -122,36 +129,37 @@ class DeepResNet1DEncoder(nn.Module):
         out = self.in_conv(x_time)
         out = self.stage1(out)
         #out = self.stage2(out)
-        feature_map = self.stage2(out) # [B, 256, L/8]
-        out = self.pool(feature_map).squeeze(-1)
-        embedding = self.fc(out)
+        feature_map = self.stage2(out)
+        out = self.pool(feature_map).squeeze(-1)#[64,128]
+        embedding = self.fc(out)#[64,128]
         return embedding
 
 class LSTMEncoder(nn.Module):
+    #x_time:[64,1,8192]
     def __init__(self, input_len=8192, frame_size=128, hidden_size=128, num_layers=2, out_dim=128):
         super().__init__()
         self.frame_size = frame_size
-        self.seq_len = math.ceil(input_len / frame_size)
+        self.seq_len = math.ceil(input_len / frame_size)#64
         self.frame_proj = nn.Linear(frame_size, hidden_size)
         self.lstm = nn.LSTM(hidden_size, hidden_size, num_layers=num_layers, batch_first=True, bidirectional=True)
         self.out_fc = nn.Linear(hidden_size * 2, out_dim)
-
     def forward(self, x_time):
         if x_time.dim() == 2:
             x_time = x_time.unsqueeze(1)
         B, C, L = x_time.shape
-        seq = x_time[:, 0, :]
+        seq = x_time[:, 0, :]#[64,8192]
         pad_len = self.seq_len * self.frame_size - L
         if pad_len > 0:
             seq = F.pad(seq, (0, pad_len))
-        frames = seq.view(B, self.seq_len, self.frame_size)
+        frames = seq.view(B, self.seq_len, self.frame_size)#[64,64,128]
         emb = self.frame_proj(frames)      
-        out, _ = self.lstm(emb)
-        feat = out.mean(dim=1)
-        feat = self.out_fc(feat)
+        out, _ = self.lstm(emb)#[64,64,256]
+        feat = out.mean(dim=1)#[64,256]
+        feat = self.out_fc(feat)#[64,128]
         return feat
 
 class SpecEncoder(nn.Module):
+    #x_spec:[64, 129, 64]
     def __init__(self, out_dim=128, base_channels=32):
         super().__init__()
         self.conv_in = nn.Sequential(
@@ -173,11 +181,11 @@ class SpecEncoder(nn.Module):
         self.fc_out = nn.Linear(base_channels * 4, out_dim)
 
     def forward(self, x_spec):
-        x_spec = x_spec.unsqueeze(1)
-        out = self.conv_in(x_spec)
-        out = self.conv_blocks(out)
-        out = out.squeeze(-1).squeeze(-1)
-        return self.fc_out(out)
+        x_spec = x_spec.unsqueeze(1)#[64, 1, 129, 64]
+        out = self.conv_in(x_spec)#[64, 32, 64, 32]
+        out = self.conv_blocks(out)#[64, 128, 1, 1]
+        out = out.squeeze(-1).squeeze(-1)#[64,128]
+        return self.fc_out(out)#[64,out_dim]
 # 3. 新增解码器 (Decoder) - 用于重构
 class MultiTaskDecoder(nn.Module):
     def __init__(self, embedding_size, seq_len, initial_channels=32): # 通道从256降到128
@@ -225,8 +233,8 @@ class MultiTaskDecoder(nn.Module):
 class ArcMarginProduct(nn.Module):
     def __init__(self, in_features, out_features, s=30.0, m=0.50):
         super(ArcMarginProduct, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.in_features = in_features #128
+        self.out_features = out_features #15
         self.s = s  # 缩放因子，s值越大，分类越严格
         self.m = m  # 角度间隔，m越大，类内越紧凑
         # 这里的 weight 相当于你的“中心原型”
@@ -235,23 +243,25 @@ class ArcMarginProduct(nn.Module):
 
     def forward(self, input, label=None):
         # 1. 归一化特征和权重，计算余弦相似度
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight)) #[64,128] x [15,128].T -> [64,15]
+        #cosin[i][j]:样本i与类j的中心原型的余弦相似度
         if label is None:
             return cosine * self.s
         
         # 计算 sin(theta) 用于后续判断
         sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
         phi = cosine * math.cos(self.m) - sine * math.sin(self.m)
+        #cos(theta + m) = cos(theta)*cos(m) - sin(theta)*sin(m)
         # 当 theta + m > pi 时，减弱惩罚，防止梯度爆炸
         phi = torch.where(cosine > 0, phi, cosine)
 
         # 3. 构造输出
         one_hot = torch.zeros(cosine.size(), device=input.device)
-        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)# [64,15]，对应位置为1
         
         output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
         output *= self.s
-        return output
+        return output #[64,15]
 # 4. 主网络 (MultiTaskOSRNet) - 核心改动
 class MultiTaskOSRNet(nn.Module):
     def __init__(self, cfg):
@@ -278,7 +288,7 @@ class MultiTaskOSRNet(nn.Module):
         fused_dim = cfg.cnn_out + cfg.lstm_out + 64 # 64 是 spec_out 的维度
 
         self.bottleneck_base = nn.Sequential(
-            # 第一层：先做初步整合与筛选
+            # 第一层：先做初步整合与筛选[64,320]-->[64,128]
             nn.Linear(fused_dim, cfg.hidden_shared * 2), 
             nn.BatchNorm1d(cfg.hidden_shared * 2),
             nn.LeakyReLU(0.2, inplace=True),
@@ -338,13 +348,15 @@ class MultiTaskOSRNet(nn.Module):
         feat_spec = self.spec_encoder(modal["spec"])
 
         # 3) 特征融合
-        fused = torch.cat([feat_cnn, feat_lstm, feat_spec], dim=1)
-        z_raw = self.bottleneck_base(fused) # 这里的 z_raw 用于计算 Center Loss 和重构
+        fused = torch.cat([feat_cnn, feat_lstm, feat_spec], dim=1)#[64,320]
+        z_raw = self.bottleneck_base(fused) # 这里的 z_raw 用于计算 Center Loss 和重构,[64,128]
         
        
         # 4) 分类决策 (使用 Dropout 提高泛化性)
          # 1. 对 z 进行 L2 归一化 (关键步骤)
         z_norm = F.normalize(z_raw, p=2, dim=1)
+        #沿列维度（左右方向），对每个样本i，进行单位向量化
+
         z_dropped = self.drop(z_norm)
         
         # 粗分类 Logits
