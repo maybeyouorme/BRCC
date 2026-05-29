@@ -252,6 +252,8 @@ class ArcMarginProduct(nn.Module):
         sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
         phi = cosine * math.cos(self.m) - sine * math.sin(self.m)
         #cos(theta + m) = cos(theta)*cos(m) - sin(theta)*sin(m)
+        #角度加m,cos值减小，模型被强制学习得更好，必须让类别特征更加贴近其原型，使得phi恢复到足够大的值，才能保证分类正确。
+
         # 当 theta + m > pi 时，减弱惩罚，防止梯度爆炸
         phi = torch.where(cosine > 0, phi, cosine)
 
