@@ -34,6 +34,7 @@ def load_and_combine_data(data_dir, is_known, exclude_labels=None):
     all_snrs = []
 
     file_list = [f for f in os.listdir(data_dir) if f.endswith(".mat")]
+    #遍历 data_dir 文件夹里的所有文件，只把后缀是 .mat 的文件名挑出来，放进列表 file_list 里
     file_list.sort()
     print(f"Files found in {'Known' if is_known else 'Unknown'} dir: {file_list}")
     
@@ -74,8 +75,13 @@ def main():
     # 1.1 加载所有已知码和未知码数据 (新增 fine_full)
     print("\n--- Loading Known Codes ---")
     features_known, coarse_known, fine_known, snrs_known = load_and_combine_data(known_data_dir, is_known=True)
+    #[15000, 8192] [15000,] [15000,] [15000,]
+
     print("\n--- Loading Unknown Codes ---")
     features_unknown, coarse_unknown, fine_unknown, snrs_unknown = load_and_combine_data(unknown_data_dir, is_known=False)
+    #1unknown:[3000, 8192] [3000,] [3000,] [3000,]
+    #2unknown:[3000, 8192] [3000,] [3000,] [3000,] 12dBunknown
+    #3unknown:[3006, 8192] [3006,] [3006,] [3006,]
 
     # 1.2 映射已知码标签到连续整数
     mapped_coarse_labels, coarse_map = map_labels_to_continuous(coarse_known)

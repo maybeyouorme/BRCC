@@ -56,11 +56,11 @@ class Config:
         # 无监督正则化参数 (L_total = L_sup + gamma * L_unsup)
         self.use_autoencoder = True     # 是否使用 Autoencoder 进行正则化
         self.gamma_recon = 1.0         # 重构损失权重 (L_recon)
-        self.lambda_center = 0.5
+        self.lambda_center = 0.5        # 中心损失权重 (L_center)
 
-        self.lambda_contrast = 2.5  #对比学习
+        self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits15"
+        self.save_dir = "./checkpoits1"
         self.model_save_name = "best_model.pth"
         self.model_save_path = os.path.join(self.save_dir, self.model_save_name)
 
@@ -68,7 +68,7 @@ class Config:
         self.cm_dir = os.path.join(self.results_dir, 'confusion_matrices')
         self.visualization_path = os.path.join(self.results_dir, 'tsne_feature_visualization')
         self.acc_dir = os.path.join(self.results_dir, 'accuracy_curves')
-        self.eval_data_path = '/data/Project_lyb/Open data/val_data_for_eval.pkl'
+        self.eval_data_path = '/data/project_lyb/Open data/val_data_for_eval.pkl'
         
         # OSR 评估参数
         self.osr_confidence_level = 0.90 # OSR 拒绝阈值选择的置信度 (例如：Known TPR=95%)

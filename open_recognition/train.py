@@ -32,15 +32,15 @@ class SupConLoss(nn.Module):
         anchor_dot_contrast = torch.div(
             torch.matmul(features, features.T),
             self.temperature
-        )
-        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        )#[64,64]
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)#[B, 1]即([64,1])
         logits = anchor_dot_contrast - logits_max.detach()
-        labels = labels.contiguous().view(-1, 1)
-        mask = torch.eq(labels, labels.T).float().to(device)
+        labels = labels.contiguous().view(-1, 1)#[64,1]
+        mask = torch.eq(labels, labels.T).float().to(device)#[64, 64]，同类为1，不同类为0
         logits_mask = torch.scatter(
             torch.ones_like(mask), 1,
             torch.arange(batch_size).view(-1, 1).to(device), 0
-        )
+        )# 对角线为0，其他所有位置都为1的二维掩码矩阵，[64, 64]
         mask = mask * logits_mask
         exp_logits = torch.exp(logits) * logits_mask
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-9)
@@ -112,14 +112,14 @@ def train_model(model, train_loader, val_loader, cfg):
             # --- 动态计算 SNR 权重 ---
             snr_weights = 1.0 
             # --- 1. 监督分类损失 ---
-            l_c_raw = F.cross_entropy(coarse_logits, coarse_labels, reduction='none')
+            l_c_raw = F.cross_entropy(coarse_logits, coarse_labels, reduction='none')#[64]
             l_f_raw = F.cross_entropy(fine_logits, fine_labels, reduction='none')
             
             loss_coarse = (l_c_raw * snr_weights).mean()
             loss_fine = (l_f_raw * snr_weights).mean()
             loss_sup = cfg.lambda_coarse * loss_coarse + cfg.lambda_fine * loss_fine
             
-            #-----中心损失
+            # --- 2. 中心损失
             loss_center_raw = model.get_center_loss(z, fine_labels) 
 
             loss_center = loss_center_raw * cfg.lambda_center
@@ -128,7 +128,7 @@ def train_model(model, train_loader, val_loader, cfg):
             lambda_contrast = getattr(cfg, "lambda_contrast", 2.5)
             loss_contrast = criterion_supcon(proj_feat, fine_labels) * lambda_contrast
 
-            # --- 3. 无监督重构损失 (L_RE) ---
+            # --- 4. 无监督重构损失 (L_RE) ---
             loss_recon = torch.tensor(0.0, device=cfg.device)
             if cfg.use_autoencoder and 'reconstruction' in output:
                 reconstruction = output['reconstruction']
@@ -136,10 +136,12 @@ def train_model(model, train_loader, val_loader, cfg):
                 if target_data.dim() == 3 and reconstruction.dim() == 2:
                     target_data = target_data.squeeze(1)
                 target_data = target_data.detach()
+
+                #[64,8192]
                 # 计算每个样本的 MSE: [B]
                 mse_per_sample = F.mse_loss(reconstruction, target_data, reduction='none').mean(dim=1)
 
-                # [2] 类别特异性加权逻辑 (针对 Polar 类强化)
+                # 类别特异性加权逻辑 (针对 Polar 类强化)
                 class_weights = torch.ones_like(fine_labels).float()
                 class_weights[fine_labels == 3] = 4.0
               
@@ -151,8 +153,9 @@ def train_model(model, train_loader, val_loader, cfg):
 
             total_loss_batch.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)#梯度裁剪
             
+            # 中心损失梯度被放大了lambda_center倍，因此在参数更新前需要进行缩放以解耦学习率
             if cfg.lambda_center > 0:
                 for param in model.center_loss_fn.parameters():
                     param.grad.data *= (1. / max(cfg.lambda_center, 1e-6))
@@ -195,7 +198,7 @@ def train_model(model, train_loader, val_loader, cfg):
                 l_f = (F.cross_entropy(f_out, fine_labels, reduction='none') * w).mean()
                 
                 v_loss = cfg.lambda_coarse * l_c + cfg.lambda_fine * l_f
-# --- [新增] 对比学习损失 ---
+                # --- [新增] 对比学习损失 ---
                 l_contrast = criterion_supcon(f_feat, fine_labels)
                 v_loss += getattr(cfg, "lambda_contrast", 2.5) * l_contrast
 
@@ -208,7 +211,11 @@ def train_model(model, train_loader, val_loader, cfg):
                     t_data = output['target_signal']
                     if t_data.dim() == 3 and recon.dim() == 2:
                         t_data = t_data.squeeze(1)
-                    l_r = (F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w).mean()
+                    
+                    l_r = (F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w).mean()#[]
+                    #l_r = F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w
+                    #TODO:我把师兄原来的第二个mean去掉了,效果变得很差
+
                     # 保持权重逻辑与训练集一致
                     c_w = torch.ones_like(fine_labels).float()
                     c_w[fine_labels == 3] = 4.0

@@ -25,7 +25,8 @@ class SignalPreprocessor(nn.Module):
             t = self.smooth(t)
         freq_complex = torch.fft.rfft(t.squeeze(1), n=self.n_fft)
         freq_mag = torch.abs(freq_complex)#[B, 129]
-        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True)
+        window = torch.hann_window(256).to(t.device)  # 汉宁窗
+        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True,window=window)#[B, 频率轴(129), 时间轴(64)]
         spec = torch.abs(spec)#[B, 频率轴(129), 时间轴(64)]
         return {"time": t, "freq": freq_mag, "spec": spec, "raw": raw_x}
 
@@ -188,25 +189,28 @@ class SpecEncoder(nn.Module):
         return self.fc_out(out)#[64,out_dim]
 # 3. 新增解码器 (Decoder) - 用于重构
 class MultiTaskDecoder(nn.Module):
+    #input:[64,128]-->[64,8192]
     def __init__(self, embedding_size, seq_len, initial_channels=32): # 通道从256降到128
         super().__init__()
         self.seq_len = seq_len
         downsample_factor = 8
-        self.L_intermediate = seq_len // downsample_factor   
+        self.L_intermediate = seq_len // downsample_factor#1024   
         # 1. 核心瓶颈层：增加一个线性收缩，限制信息流量
-        bottleneck_size = embedding_size // 2 
+        bottleneck_size = embedding_size // 2 #64
         self.bottleneck = nn.Sequential(
             nn.Linear(embedding_size, bottleneck_size),
             nn.BatchNorm1d(bottleneck_size),
             nn.ReLU(),
-        )
+        )#[64,64]
 
         # 1. 瓶颈层映射 (减少神经元数量，增加非线性)
         self.fc_expand = nn.Sequential(
             nn.Linear(bottleneck_size, initial_channels * self.L_intermediate),
             nn.BatchNorm1d(initial_channels * self.L_intermediate),
             nn.LeakyReLU(0.2, inplace=True), # 使用 LeakyReLU 增加神经元活跃度
-        )     
+        )#[64, 32*1024]=[64,32768]
+
+        #输入：[64, 32, 1024]     
         # 2. 逐步上采样模块 (L/8 -> L/4 -> L/2 -> L)
         self.upsample_blocks = nn.Sequential(
             # Stage 1: L/8 -> L/4
@@ -214,21 +218,26 @@ class MultiTaskDecoder(nn.Module):
             nn.BatchNorm1d(initial_channels // 2),
             nn.ELU(inplace=True),
             nn.Dropout1d(0.1), # <--- 新增：轻微扰动卷积特征图
+            #[64, 32, 2048]
+
             # Stage 2: L/4 -> L/2
             nn.ConvTranspose1d(initial_channels // 2, initial_channels // 4, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.BatchNorm1d(initial_channels // 4),
             nn.ReLU(inplace=True),
+            #[64, 16, 4096]
+
           # Stage 3: L/2 -> L (Final Output)
             nn.ConvTranspose1d(initial_channels // 4, 1, kernel_size=3, stride=2, padding=1, output_padding=1),
+            #[64, 1, 8192]
         )
     def forward(self, embedding):
         # 映射并变形
         x = self.bottleneck(embedding)
         x = self.fc_expand(x)
-        x = x.view(x.size(0), -1, self.L_intermediate)
+        x = x.view(x.size(0), -1, self.L_intermediate)#[64, 32, 1024]
        # 上采样重构
         reconstructed_x = self.upsample_blocks(x)
-        return reconstructed_x.squeeze(1) # [B, L]
+        return reconstructed_x.squeeze(1) # [B, L]=[64, 8192]
 # 基于角度的余弦距离
 class ArcMarginProduct(nn.Module):
     def __init__(self, in_features, out_features, s=30.0, m=0.50):
@@ -259,7 +268,7 @@ class ArcMarginProduct(nn.Module):
 
         # 3. 构造输出
         one_hot = torch.zeros(cosine.size(), device=input.device)
-        one_hot.scatter_(1, label.view(-1, 1).long(), 1)# [64,15]，对应位置为1
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)# [64,15]，前一个1表示维度，横向操作；后一个1表示对应位置写入1
         
         output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
         output *= self.s

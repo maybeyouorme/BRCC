@@ -29,8 +29,35 @@
 #         labels = data_t[i, -3:]           # SNR, 粗标签, 细标签
 #         row = list(llr_preview) + [0] + list(labels)
 #         print(f'{i:>4d}' + ''.join(f'{v:>8d}' for v in row))
-import torch
-import torch.nn.functional as F
-a = torch.tensor([[3.0, 4.0]])
-a_norm = F.normalize(a, p=2, dim=1)
-print(a_norm)
+
+
+# import torch
+# import torch.nn.functional as F
+# a = torch.tensor([[3.0, 4.0]])
+# a_norm = F.normalize(a, p=2, dim=1)
+# print(a_norm)
+
+import os
+base_data_dir = "/data/Project_lc/Open data/matfile"
+known_data_dir = os.path.join(base_data_dir, "12dBknown_codes")
+unknown_data_dir = os.path.join(base_data_dir, "3unknown_codes")
+
+from main import load_and_combine_data
+
+# print("\n--- Loading Known Codes ---")
+#features_known, coarse_known, fine_known, snrs_known = load_and_combine_data(known_data_dir, is_known=True)
+# print(features_known.shape, coarse_known.shape, fine_known.shape, snrs_known.shape)
+# print(fine_known[950:1050],snrs_known[1000:1050])
+
+
+print("\n--- Loading Unknown Codes ---")
+features_unknown, coarse_unknown, fine_unknown, snrs_unknown = load_and_combine_data(unknown_data_dir, is_known=False)
+# print(features_unknown.shape, coarse_unknown.shape, fine_unknown.shape, snrs_unknown.shape)
+# print(fine_unknown[950:1050],snrs_unknown[1000:1050])
+
+# coarse_unknown = set(coarse_unknown)
+# print(f"Unique coarse labels in unknown data: {coarse_unknown}")
+# fine_unknown = set(fine_unknown)
+# print(f"Unique fine labels in unknown data: {fine_unknown}")
+# snrs_unknown = set(snrs_unknown)
+# print(f"Unique SNRs in known data: {snrs_unknown}")
