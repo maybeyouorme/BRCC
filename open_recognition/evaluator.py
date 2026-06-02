@@ -123,7 +123,7 @@ class EVTCalibrator:
         self.models = {}
 
     def fit(self, class_recon_errors, class_dist_scores):
-        all_classes = set(class_recon_errors.keys()).union(set(class_dist_scores.keys()))
+        all_classes = set(class_recon_errors.keys()).union(set(class_dist_scores.keys()))#获取所有出现过的类别ID集合
         print("\n⚙️ 正在执行 EVT 校准 (Weibull 拟合)...")
         for cls_id in all_classes:
             self.models[cls_id] = {}
@@ -187,7 +187,7 @@ def get_predictions(model, loader, device, centers=None):
     with torch.no_grad():
         for x, y_c, y_f, snr in tqdm(loader, desc="Inference"):
             x_dev = x.to(device)
-            input_data = x_dev.unsqueeze(1) if x_dev.dim() == 2 else x_dev
+            input_data = x_dev.unsqueeze(1) if x_dev.dim() == 2 else x_dev#[B, 1, SeqLen]=[64,1,8192]
             output = model(input_data) 
             # --- 1. 获取粗/细预测结果 ---
             c_logits = output['coarse_logits']
@@ -198,14 +198,15 @@ def get_predictions(model, loader, device, centers=None):
             res['snr'].append(snr.numpy())
             res['c_pred'].append(c_logits.argmax(1).cpu().numpy())
             res['f_pred'].append(f_logits.argmax(1).cpu().numpy())
-            res['embs'].append(output['embedding'].cpu().numpy())
+            res['embs'].append(output['embedding'].cpu().numpy())#z_norm,[64,128]
+
             # --- 2. 原始维度提取：MSP (Maximum Softmax Probability) ---
-            probs = torch.softmax(c_logits, dim=1)
-            msp, _ = torch.max(probs, dim=1)
+            probs = torch.softmax(c_logits, dim=1)#概率：[64,5]
+            msp, _ = torch.max(probs, dim=1)#置信度:[64]
             raw_metrics['msp'].append(msp.cpu().numpy())
 
             #----熵越高，代表越可能是未知类
-            ent = -torch.sum(probs * torch.log(probs + 1e-10), dim=1)
+            ent = -torch.sum(probs * torch.log(probs + 1e-10), dim=1)#[64]
             raw_metrics['entropy'].append((ent / np.log(5)).cpu().numpy())
 
             # --- 3. 原始维度提取：Reconstruction Error (MAE/MSE) ---
@@ -214,23 +215,25 @@ def get_predictions(model, loader, device, centers=None):
             # 统一形状计算每个样本的平均误差 [B]
             if target.dim() == 3: target = target.squeeze(1)
             if recon.dim() == 3: recon = recon.squeeze(1)
+            #[64,8192]
+
             # 计算互相关系数 (Normalized Cross-Correlation)
             # 接近 1 表示波形结构一致，接近 0 表示结构完全不同
-            cos_sim = F.cosine_similarity(recon, target, dim=1)
-            r_err = torch.abs(torch.mean(torch.abs(recon - target), dim=1) / (cos_sim + 1e-8))
+            cos_sim = F.cosine_similarity(recon, target, dim=1)#[64]
+            r_err = torch.abs(torch.mean(torch.abs(recon - target), dim=1) / (cos_sim + 1e-8))#[64]
             raw_metrics['recon'].append(r_err.cpu().numpy())
 
             # 4. ArcMargin 核心：计算角度/余弦相似度
-            z = F.normalize(output['embedding'], p=2, dim=1) # 必须 L2 归一化
-            prototypes = F.normalize(model.fine_head.weight, p=2, dim=1)
-            sim_matrix = torch.matmul(z, prototypes.t())
-            max_sim, _ = torch.max(sim_matrix, dim=1)
+            z = F.normalize(output['embedding'], p=2, dim=1) # 必须 L2 归一化，[64, 128]
+            prototypes = F.normalize(model.fine_head.weight, p=2, dim=1)#[15, 128]
+            sim_matrix = torch.matmul(z, prototypes.t())#[64, 15]
+            max_sim, _ = torch.max(sim_matrix, dim=1)#每个样本与所有原型的最大相似度，[64]
             res['max_sim'].append(max_sim.cpu().numpy())
             # 将“不相似度”作为距离得分 (1 - sim)，值越大越像未知
             raw_metrics['dist'].append((1.0 - max_sim).cpu().numpy())
     # 合并所有 batch 结果
     for k in res:
-        res[k] = np.concatenate(res[k])
+        res[k] = np.concatenate(res[k])#每个元素值沿行方向拼接
     for k in raw_metrics:
         raw_metrics[k] = np.concatenate(raw_metrics[k])
 
@@ -239,7 +242,7 @@ def get_predictions(model, loader, device, centers=None):
     print(f"Total Background samples in results: {np.sum(all_true_labels == -1)}")
     # 将原始指标并入结果字典
     res.update(raw_metrics)
-    res['re_score_raw'] = res['recon']
+    res['re_score_raw'] = res['recon']#为重构误差创建别名
     return res
 # =========================================================================
 # 类特异性阈值搜索
@@ -734,13 +737,27 @@ def main():
         print(f"🔍 [验证集] Recon 均值 (放大后): {val_res['recon'].mean():.6f}")
 
         # 2. 拟合 EVT 模型
-        val_known_correct_mask = (val_res['c_true'] != -1) & (val_res['c_pred'] == val_res['c_true'])
+        val_known_correct_mask = (val_res['c_true'] != -1) & (val_res['c_pred'] == val_res['c_true'])#只保留预测正确的已知类样本的掩码
 
         class_recon_errors = {i: val_res['recon'][val_known_correct_mask & (val_res['c_true'] == i)] 
                           for i in range(len(COARSE_LABEL_NAMES))}
+        #val_res['recon']:list,长度为符合条件的样本数
+        #为每个粗分类分别收集正确样本的重构误差
+        '''
+        {
+            0: [recon_err_1, recon_err_2, ...],# Conv 类的重构误差
+            1: [recon_err_3, recon_err_4, ...],# LDPC 类的重构误差
+            2: [...],                         # Turbo 类的重构误差
+            3: [...],                         # Polar 类的重构误差
+            4: [...]                           # BCH 类的重构误差
+        }
+        '''
 
         class_dist_scores = {i: val_res['dist'][val_known_correct_mask & (val_res['c_true'] == i)] 
                           for i in range(len(COARSE_LABEL_NAMES))}
+        #val_res['dist']:list,长度为符合条件的样本数
+        #为每个粗分类分别收集正确样本的距离分数
+
         calibrator = EVTCalibrator(tail_size=110) 
         calibrator.fit(class_recon_errors, class_dist_scores)
 

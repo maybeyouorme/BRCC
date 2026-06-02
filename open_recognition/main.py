@@ -11,7 +11,7 @@ from dataset import ChannelCodeDataset, map_labels_to_continuous
 from train import train_model
 
 # 设置环境和随机种子
-os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0" 
 torch.manual_seed(42)
 np.random.seed(42)
 
@@ -92,7 +92,9 @@ def main():
     cfg.seq_len = features_known.shape[1]    # <-- 更新序列长度
     
     print(f"\nOriginal Coarse Label Map: {coarse_map}, Total Coarse Classes: {cfg.num_coarse_classes}")
+    #[1,2,3,4,5]-->[0,1,2,3,4]
     print(f"Original Fine Label Map: {fine_map}, Total Fine Classes: {cfg.num_fine_classes}")
+    #[1,2,...,14,15]-->[0,1,...,13,14]
 
 
     # --- 2. 划分已知码：80% 训练, 10% 验证, 10% 测试 (使用细标签进行分层抽样，确保参数均衡) ---

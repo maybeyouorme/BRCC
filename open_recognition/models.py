@@ -26,7 +26,7 @@ class SignalPreprocessor(nn.Module):
         freq_complex = torch.fft.rfft(t.squeeze(1), n=self.n_fft)
         freq_mag = torch.abs(freq_complex)#[B, 129]
         window = torch.hann_window(256).to(t.device)  # 汉宁窗
-        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True,window=window)#[B, 频率轴(129), 时间轴(64)]
+        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True)#[B, 频率轴(129), 时间轴(64)]
         spec = torch.abs(spec)#[B, 频率轴(129), 时间轴(64)]
         return {"time": t, "freq": freq_mag, "spec": spec, "raw": raw_x}
 
