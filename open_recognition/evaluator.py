@@ -123,7 +123,7 @@ class EVTCalibrator:
         self.models = {}
 
     def fit(self, class_recon_errors, class_dist_scores):
-        all_classes = set(class_recon_errors.keys()).union(set(class_dist_scores.keys()))#获取所有出现过的类别ID集合
+        all_classes = set(class_recon_errors.keys()).union(set(class_dist_scores.keys()))#获取所有已知类别ID集合
         print("\n⚙️ 正在执行 EVT 校准 (Weibull 拟合)...")
         for cls_id in all_classes:
             self.models[cls_id] = {}
@@ -131,7 +131,7 @@ class EVTCalibrator:
             #-------拟合重构误差尾部
             re_errors = np.array(class_recon_errors.get(cls_id, []))
             if len(re_errors) >= self.tail_size:
-                tail_re = np.sort(re_errors)[-self.tail_size:]
+                tail_re = np.sort(re_errors)[-self.tail_size:]#升序
                 if np.std(tail_re) < 1e-9:
                     tail_re = tail_re + np.random.normal(0, 1e-7, len(tail_re))
                     print(f"数据全相等拟合失败")
@@ -193,11 +193,11 @@ def get_predictions(model, loader, device, centers=None):
             c_logits = output['coarse_logits']
             f_logits = output['fine_logits']
 
-            res['c_true'].append(y_c.numpy())
-            res['f_true'].append(y_f.numpy())
-            res['snr'].append(snr.numpy())
-            res['c_pred'].append(c_logits.argmax(1).cpu().numpy())
-            res['f_pred'].append(f_logits.argmax(1).cpu().numpy())
+            res['c_true'].append(y_c.numpy())#[64],作为一个元素
+            res['f_true'].append(y_f.numpy())#[64]
+            res['snr'].append(snr.numpy())#[64]
+            res['c_pred'].append(c_logits.argmax(1).cpu().numpy())#取最大值索引，[64]
+            res['f_pred'].append(f_logits.argmax(1).cpu().numpy())#[64]
             res['embs'].append(output['embedding'].cpu().numpy())#z_norm,[64,128]
 
             # --- 2. 原始维度提取：MSP (Maximum Softmax Probability) ---
@@ -207,7 +207,7 @@ def get_predictions(model, loader, device, centers=None):
 
             #----熵越高，代表越可能是未知类
             ent = -torch.sum(probs * torch.log(probs + 1e-10), dim=1)#[64]
-            raw_metrics['entropy'].append((ent / np.log(5)).cpu().numpy())
+            raw_metrics['entropy'].append((ent / np.log(5)).cpu().numpy())#熵归一化
 
             # --- 3. 原始维度提取：Reconstruction Error (MAE/MSE) ---
             recon = output['reconstruction']
@@ -765,13 +765,13 @@ def main():
         p_recons_val, p_dists_val = [], []
         for i in range(len(val_res['c_true'])):
             pr, pd = calibrator.predict_outlier_prob(val_res['c_pred'][i], val_res['recon'][i], val_res['dist'][i])
-            p_recons_val.append(pr)
-            p_dists_val.append(pd)
+            p_recons_val.append(pr)#每个样本的重构误差 EVT 概率
+            p_dists_val.append(pd)#每个样本的距离分数 EVT 概率
         # 融合 EVT 概率与信息熵
         p_recons_val = np.array(p_recons_val)
         p_dists_val = np.array(p_dists_val)
         entropy_val = np.array(val_res['entropy'])
-        fusion_scores_val = (p_dists_val**2.1) * (p_recons_val**0.5) / ((1 + entropy_val)**1.0)
+        fusion_scores_val = (p_dists_val**2.1) * (p_recons_val**0.5) / ((1 + entropy_val)**1.0)#TODO
 
         # 4. 锁定类特异性阈值 (针对 Recall-0.95)
         class_thresholds = find_class_specific_thresholds(
