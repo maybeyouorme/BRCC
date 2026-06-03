@@ -60,9 +60,9 @@ class Config:
 
         self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits5"
+        self.save_dir = "./checkpoits3"
         #1:原始代码
-
+        #3：去掉一个mean
         self.model_save_name = "best_model.pth"
         self.model_save_path = os.path.join(self.save_dir, self.model_save_name)
 

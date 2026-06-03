@@ -253,10 +253,10 @@ def find_class_specific_thresholds(fusion_scores, c_true, c_pred, target_recall=
     解决 Polar 类由于底噪大导致全局阈值失效的问题。
     """
     class_thresholds = {}
-    unique_classes = np.unique(c_true[c_true != -1])
-    global_median = np.median(fusion_scores[c_true != -1])
+    unique_classes = np.unique(c_true[c_true != -1])#已知类别ID
+    global_median = np.median(fusion_scores[c_true != -1])#全局已知类得分中位数
 
-    special_targets = {3: 0.85}
+    special_targets = {3: 0.85, }
 
     for cls_id in unique_classes:
         # 找出验证集中：真实是该类，且预测也是该类的样本（确保建模的是“正确特征”的边界）
@@ -267,7 +267,7 @@ def find_class_specific_thresholds(fusion_scores, c_true, c_pred, target_recall=
         mask = (c_true == cls_id) & (c_pred == cls_id)
         
         if mask.sum() > 10:
-            scores = np.sort(fusion_scores[mask])
+            scores = np.sort(fusion_scores[mask])#升序
             idx = int(len(scores) * current_recall)
             class_thresholds[cls_id] = scores[min(idx, len(scores)-1)]
         else:
@@ -742,7 +742,7 @@ def main():
         class_recon_errors = {i: val_res['recon'][val_known_correct_mask & (val_res['c_true'] == i)] 
                           for i in range(len(COARSE_LABEL_NAMES))}
         #val_res['recon']:list,长度为符合条件的样本数
-        #为每个粗分类分别收集正确样本的重构误差
+        #为每个粗分类分别收集预测正确样本的重构误差
         '''
         {
             0: [recon_err_1, recon_err_2, ...],# Conv 类的重构误差
@@ -756,7 +756,7 @@ def main():
         class_dist_scores = {i: val_res['dist'][val_known_correct_mask & (val_res['c_true'] == i)] 
                           for i in range(len(COARSE_LABEL_NAMES))}
         #val_res['dist']:list,长度为符合条件的样本数
-        #为每个粗分类分别收集正确样本的距离分数
+        #为每个粗分类分别收集预测正确样本的距离分数
 
         calibrator = EVTCalibrator(tail_size=110) 
         calibrator.fit(class_recon_errors, class_dist_scores)
@@ -772,10 +772,15 @@ def main():
         p_dists_val = np.array(p_dists_val)
         entropy_val = np.array(val_res['entropy'])
         fusion_scores_val = (p_dists_val**2.1) * (p_recons_val**0.5) / ((1 + entropy_val)**1.0)#TODO
+        # fusion_scores_val = (  
+        #     (p_dists_val ** 2.1)   
+        #     * (p_recons_val ** 0.5)
+        #     * (1 + entropy_val)
+        # )
 
         # 4. 锁定类特异性阈值 (针对 Recall-0.95)
         class_thresholds = find_class_specific_thresholds(
-            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=1.0
+            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=0.95
         )
         avg_threshold = np.mean(list(class_thresholds.values()))
         hard_upper_bound = np.percentile(fusion_scores_val, 98)
@@ -830,6 +835,11 @@ def main():
     p_dists_test = np.array(p_dists_test)
     entropy_test = np.array(test_res['entropy'])
     test_res['final_score'] = (p_dists_test**2.1) * (p_recons_test**0.5) / ((1 + entropy_test)**1.0)
+    # test_res['final_score'] = (
+    #     (p_dists_test ** 2.1)
+    #     * (p_recons_test ** 0.5)
+    #     * (1 + entropy_test)
+    # )
 
     known_scores = test_res['final_score'][known_mask_test]
     unknown_scores = test_res['final_score'][unknown_mask_test]
@@ -844,7 +854,7 @@ def main():
         
         thr = class_thresholds.get(assigned_cls, avg_threshold) 
         if test_res['final_score'][i] > thr:
-            open_pred[i] = -1
+            open_pred[i] = -1   #如果分数超过该类的特异性阈值，则判定为未知类 (-1)
 
     # --- 计算指标 ---
     known_mask = test_res['c_true'] != -1
@@ -853,11 +863,11 @@ def main():
     # ======= 新增：计算真正的召回率 (Recall Score) =======
 
     known_mask = test_res['c_true'] != -1
-    true_labels = test_res['c_true'][known_mask]
-    pred_labels = open_pred[known_mask]
+    true_labels = test_res['c_true'][known_mask] #已知类的真实标签
+    pred_labels = open_pred[known_mask] #已知类的预测标签
     class_indices = list(range(len(COARSE_LABEL_NAMES)))
-    per_class_recall = recall_score(true_labels, pred_labels, labels=class_indices, average=None)
-    macro_recall = np.mean(per_class_recall)
+    per_class_recall = recall_score(true_labels, pred_labels, labels=class_indices, average=None)   #计算每个类别的召回率
+    macro_recall = np.mean(per_class_recall)    #平均召回率
     print(f"\n📈 [真实召回率报告 (Measured Recall)]")
     print(f"   - 总体平均召回率 (Known Recall): {macro_recall*100:.2f}%")
     for i in range(len(per_class_recall)):
