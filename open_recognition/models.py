@@ -26,7 +26,7 @@ class SignalPreprocessor(nn.Module):
         freq_complex = torch.fft.rfft(t.squeeze(1), n=self.n_fft)
         freq_mag = torch.abs(freq_complex)#[B, 129]
         window = torch.hann_window(256).to(t.device)  # 汉宁窗
-        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True)#[B, 频率轴(129), 时间轴(64)]
+        spec = torch.stft(t.squeeze(1), n_fft=self.n_fft, hop_length=self.hop_length, return_complex=True,window=window)#[B, 频率轴(129), 时间轴(64)]
         spec = torch.abs(spec)#[B, 频率轴(129), 时间轴(64)]
         return {"time": t, "freq": freq_mag, "spec": spec, "raw": raw_x}
 
@@ -82,9 +82,9 @@ class CenterLoss(nn.Module):
                   torch.pow(self.centers, 2).sum(dim=1, keepdim=True).t()#[B,1] + [C,1].T -> [B,C]
         distmat.addmm_(x, self.centers.t(), beta=1, alpha=-2)#[B,C]
         classes = torch.arange(self.num_classes).long().to(self.device)#[C]
-        labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)#[B, C]
-        mask = labels.eq(classes.expand(batch_size, self.num_classes))#[B, C]
-        dist = distmat * mask.float()# 只保留样本到对应类的距离
+        labels = labels.unsqueeze(1).expand(batch_size, self.num_classes)#[B, C]，每一行是当前样本的标签值
+        mask = labels.eq(classes.expand(batch_size, self.num_classes))#[B, C]，括号里每一行是所有类别
+        dist = distmat * mask.float()# 只保留样本到对应类中心的距离
         loss = dist.clamp(min=1e-12, max=1e+12).sum() / batch_size
         return loss
 # 2. 编码器 (Encoder) - 保持不变 (只使用 time-domain x_time)

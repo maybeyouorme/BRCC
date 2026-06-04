@@ -32,19 +32,20 @@ class SupConLoss(nn.Module):
         anchor_dot_contrast = torch.div(
             torch.matmul(features, features.T),
             self.temperature
-        )#[64,64]
+        )#[64,64]，每行是一个样本与所有样本的余弦相似度（经过温度缩放）
         logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)#[B, 1]即([64,1])
-        logits = anchor_dot_contrast - logits_max.detach()
+        logits = anchor_dot_contrast - logits_max.detach()#数值稳定性处理，减去每行的最大值
+
         labels = labels.contiguous().view(-1, 1)#[64,1]
-        mask = torch.eq(labels, labels.T).float().to(device)#[64, 64]，同类为1，不同类为0
+        mask = torch.eq(labels, labels.T).float().to(device)#[64, 64]，每一行中同类为1，不同类为0
         logits_mask = torch.scatter(
             torch.ones_like(mask), 1,
             torch.arange(batch_size).view(-1, 1).to(device), 0
         )# 对角线为0，其他所有位置都为1的二维掩码矩阵，[64, 64]
-        mask = mask * logits_mask
-        exp_logits = torch.exp(logits) * logits_mask
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-9)
-        mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-9)
+        mask = mask * logits_mask# 保留同类样本的掩码，同时排除掉自身（对角线位置）
+        exp_logits = torch.exp(logits) * logits_mask#对角线位置被置0，其他位置为exp(相似度)的矩阵，[64, 64]，每行是一个样本与所有样本的指数相似度（排除自身）
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-9)#[64, 64]，
+        mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-9)#[64]，每行是一个样本与同类样本的平均对数概率
         loss = -mean_log_prob_pos.mean()
         return loss
 
@@ -205,6 +206,7 @@ def train_model(model, train_loader, val_loader, cfg):
                 # --- 中心损失 ---
                 v_loss += cfg.lambda_center * model.get_center_loss(z, fine_labels)
 
+                # --- 重构损失 ---
                 if cfg.use_autoencoder and 'reconstruction' in output:
                     recon = output['reconstruction']
                     #t_data = data.squeeze(1) if data.dim() == 3 else data

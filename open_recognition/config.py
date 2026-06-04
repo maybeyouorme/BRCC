@@ -60,9 +60,10 @@ class Config:
 
         self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits3"
+        self.save_dir = "./checkpoits4"
         #1:原始代码
-        #3：去掉一个mean
+        #2:加窗，去掉一个mean:OSR混淆矩阵有略微下降，AUC值也下降了0.03
+        #3：加窗：
         self.model_save_name = "best_model.pth"
         self.model_save_path = os.path.join(self.save_dir, self.model_save_name)
 

@@ -759,7 +759,7 @@ def main():
         #为每个粗分类分别收集预测正确样本的距离分数
 
         calibrator = EVTCalibrator(tail_size=110) 
-        calibrator.fit(class_recon_errors, class_dist_scores)
+        calibrator.fit(class_recon_errors, class_dist_scores)#为每个类用预测正确的数据构建EVT模型
 
         # 3. 计算验证集的融合离群分数 (双阈值逻辑)
         p_recons_val, p_dists_val = [], []
