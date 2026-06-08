@@ -463,7 +463,7 @@ if __name__ == "__main__":
     # ====== 用户在此配置路径 ======
     cfg = Config()
     main(
-        model_path="./best_model.pth",
+        model_path="../open_recognition/checkpoits1/best_model.pth",
         val_data_path="/data/project_lyb/Open data/val_data_for_eval_val.pkl",
         test_data_path="/data/project_lyb/Open data/val_data_for_eval_test.pkl",
         save_dir="./output",
