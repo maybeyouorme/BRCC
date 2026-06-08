@@ -6,7 +6,7 @@ import os
 class Config:
     def __init__(self):
         # 硬件设置
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         self.gpu_id = "0"
         
         # --- 核心任务参数 (MT-OSR) ---
@@ -15,8 +15,6 @@ class Config:
         
         # 已知类别数 (会在 main.py 中根据数据动态更新)
         self.num_coarse_classes = 5     # 粗类别数 (例如 Conv, Turbo, BCH, LDPC, Polar)
-        # 细类别数 (所有已知码的参数组合总数，需手动/动态确定)
-        self.num_fine_classes = 15      
         
         # =============================================================================
         # --- 新增：模型架构参数 (对应 MultiTaskOSRNet) ---
@@ -49,9 +47,8 @@ class Config:
         self.batch_size = 64
         self.learning_rate = 5e-4
 
-        # --- 多任务损失权重 ---
-        self.lambda_coarse = 0.5        # 粗分类损失权重
-        self.lambda_fine = 2.0          # 细分类损失权重
+        # --- 分类损失权重 ---
+        self.lambda_coarse = 1.5        # 粗分类损失权重
 
         # 无监督正则化参数 (L_total = L_sup + gamma * L_unsup)
         self.use_autoencoder = True     # 是否使用 Autoencoder 进行正则化
@@ -60,8 +57,8 @@ class Config:
 
         self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits3"
-        #1:原始代码:
+        self.save_dir = "./checkpoits1"
+        #1:修改损失函数,去掉loss_fine：
         self.model_save_name = "best_model.pth"
         self.model_save_path = os.path.join(self.save_dir, self.model_save_name)
 

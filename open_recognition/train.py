@@ -103,31 +103,28 @@ def train_model(model, train_loader, val_loader, cfg):
             optimizer_center.zero_grad()
             
             # 前向传播 (model 现在返回一个 dict)
-            output = model(data, labels=fine_labels)
+            output = model(data, labels=coarse_labels)
             # 解析输出字典
             z = output['embedding']
             coarse_logits = output['coarse_logits']
-            fine_logits = output['fine_logits']
             proj_feat = output['proj_feat'] # 对比学习专用特征
             
             # --- 动态计算 SNR 权重 ---
             snr_weights = 1.0 
             # --- 1. 监督分类损失 ---
             l_c_raw = F.cross_entropy(coarse_logits, coarse_labels, reduction='none')#[64]
-            l_f_raw = F.cross_entropy(fine_logits, fine_labels, reduction='none')
             
             loss_coarse = (l_c_raw * snr_weights).mean()
-            loss_fine = (l_f_raw * snr_weights).mean()
-            loss_sup = cfg.lambda_coarse * loss_coarse + cfg.lambda_fine * loss_fine
+            loss_sup = cfg.lambda_coarse * loss_coarse 
             
             # --- 2. 中心损失
-            loss_center_raw = model.get_center_loss(z, fine_labels) 
+            loss_center_raw = model.get_center_loss(z, coarse_labels) 
 
             loss_center = loss_center_raw * cfg.lambda_center
             
             # --- 3. 新增：对比学习损失 (SupCon) --
             lambda_contrast = getattr(cfg, "lambda_contrast", 2.5)
-            loss_contrast = criterion_supcon(proj_feat, fine_labels) * lambda_contrast
+            loss_contrast = criterion_supcon(proj_feat, coarse_labels) * lambda_contrast
 
             # --- 4. 无监督重构损失 (L_RE) ---
             loss_recon = torch.tensor(0.0, device=cfg.device)
@@ -167,12 +164,11 @@ def train_model(model, train_loader, val_loader, cfg):
             # 记录批次统计
             train_stats['loss'].append(total_loss_batch.item())
             train_stats['acc_coarse'].append((coarse_logits.argmax(1) == coarse_labels).float().mean().item())
-            train_stats['acc_fine'].append((fine_logits.argmax(1) == fine_labels).float().mean().item())
             train_stats['loss_recon'].append(loss_recon.item())
             #train_stats['loss_center'].append(loss_center_raw.item())
 
             pbar.set_postfix({'Loss': f"{total_loss_batch.item():.4f}", 
-                              'FineAcc': f"{train_stats['acc_fine'][-1]:.3f}",
+                              'CoarseAcc': f"{train_stats['acc_coarse'][-1]:.3f}",
                               'Ctrst': f"{loss_contrast.item():.4f}"
                               })
         
@@ -188,23 +184,21 @@ def train_model(model, train_loader, val_loader, cfg):
                 output = model(data, labels=None)
                 z = output['embedding']
                 c_out = output['coarse_logits']
-                f_out = output['fine_logits']
-
                 f_feat = output['proj_feat']
                 
                 # 验证集 SNR 权重逻辑保持一致
                 w = 1
                 
                 l_c = (F.cross_entropy(c_out, coarse_labels, reduction='none') * w).mean()
-                l_f = (F.cross_entropy(f_out, fine_labels, reduction='none') * w).mean()
-                
-                v_loss = cfg.lambda_coarse * l_c + cfg.lambda_fine * l_f
+
+        
+                v_loss = cfg.lambda_coarse * l_c
                 # --- [新增] 对比学习损失 ---
-                l_contrast = criterion_supcon(f_feat, fine_labels)
+                l_contrast = criterion_supcon(f_feat, coarse_labels)
                 v_loss += getattr(cfg, "lambda_contrast", 2.5) * l_contrast
 
                 # --- 中心损失 ---
-                v_loss += cfg.lambda_center * model.get_center_loss(z, fine_labels)
+                v_loss += cfg.lambda_center * model.get_center_loss(z, coarse_labels)
 
                 # --- 重构损失 ---
                 if cfg.use_autoencoder and 'reconstruction' in output:
@@ -225,16 +219,15 @@ def train_model(model, train_loader, val_loader, cfg):
                     v_loss += cfg.gamma_recon * l_r
                 
                 val_losses.append(v_loss.item())
-                val_acc_f.append((f_out.argmax(1) == fine_labels).float().mean().item())
 
         avg_val_loss = np.mean(val_losses)
-        avg_val_acc_f = np.mean(val_acc_f)
+
         
         scheduler.step(avg_val_loss)
 
         print(f"\n[Epoch {epoch + 1}/{cfg.epochs}]")
         print(f"  Train Loss: {np.mean(train_stats['loss']):.4f} (Recon: {np.mean(train_stats['loss_recon']):.6f})")
-        print(f"  Val Loss  : {avg_val_loss:.4f}, Val Fine Acc: {avg_val_acc_f:.4f}")
+        print(f"  Val Loss  : {avg_val_loss:.4f}")
 
         # 早停与保存
         if avg_val_loss < best_loss:

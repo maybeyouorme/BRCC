@@ -238,12 +238,12 @@ class MultiTaskDecoder(nn.Module):
        # 上采样重构
         reconstructed_x = self.upsample_blocks(x)
         return reconstructed_x.squeeze(1) # [B, L]=[64, 8192]
-# 基于角度的余弦距离
+# 基于角度的余弦距离 (用于粗分类)
 class ArcMarginProduct(nn.Module):
     def __init__(self, in_features, out_features, s=30.0, m=0.50):
         super(ArcMarginProduct, self).__init__()
         self.in_features = in_features #128
-        self.out_features = out_features #15
+        self.out_features = out_features # 粗类数
         self.s = s  # 缩放因子，s值越大，分类越严格
         self.m = m  # 角度间隔，m越大，类内越紧凑
         # 这里的 weight 相当于你的“中心原型”
@@ -252,7 +252,7 @@ class ArcMarginProduct(nn.Module):
 
     def forward(self, input, label=None):
         # 1. 归一化特征和权重，计算余弦相似度
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight)) #[64,128] x [15,128].T -> [64,15]
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight)) #[64,128] x [5,128].T -> [64,5]
         #cosin[i][j]:样本i与类j的中心原型的余弦相似度
         if label is None:
             return cosine * self.s
@@ -272,7 +272,8 @@ class ArcMarginProduct(nn.Module):
         
         output = (one_hot * phi) + ((1.0 - one_hot) * cosine)
         output *= self.s
-        return output #[64,15]
+        return output #[64,5]
+
 # 4. 主网络 (MultiTaskOSRNet) - 核心改动
 class MultiTaskOSRNet(nn.Module):
     def __init__(self, cfg):
@@ -281,7 +282,6 @@ class MultiTaskOSRNet(nn.Module):
         # 1. 配置参数
         self.cfg = cfg
         num_coarse = cfg.num_coarse_classes
-        num_fine = cfg.num_fine_classes
         sample_len = cfg.seq_len
         
         # 2. 预处理和特征提取器
@@ -318,12 +318,9 @@ class MultiTaskOSRNet(nn.Module):
 
         self.drop = nn.Dropout(0.2)
         self.shared_embedding_size = cfg.hidden_shared
-        # 5. 分类头 (核心修改：引入原型学习)
-        self.coarse_head = nn.Linear(self.shared_embedding_size, num_coarse)       
-        # 细分类采用原型学习：定义每个类的“中心原型”
-        # 预测时计算样本到这些原型的距离，距离越近置信度越高
-        self.fine_head =ArcMarginProduct(self.shared_embedding_size, num_fine, s=32.0, m=0.8)
-        self.center_loss_fn = CenterLoss(num_classes=num_fine, feat_dim=self.shared_embedding_size, device=cfg.device)
+        # 5. 分类头 (原型学习)
+        self.coarse_head = ArcMarginProduct(self.shared_embedding_size, num_coarse, s=32.0, m=0.8)
+        self.center_loss_fn = CenterLoss(num_classes=num_coarse, feat_dim=self.shared_embedding_size, device=cfg.device)
         self.use_autoencoder = cfg.use_autoencoder
         if self.use_autoencoder:
             self.decoder = MultiTaskDecoder(self.shared_embedding_size, sample_len)
@@ -344,8 +341,6 @@ class MultiTaskOSRNet(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
         
-        if hasattr(self, 'fine_head') and hasattr(self.fine_head, 'weight'):
-            nn.init.xavier_uniform_(self.fine_head.weight)
 
     def forward(self, x, labels=None):
         # 1) 预处理
@@ -371,12 +366,8 @@ class MultiTaskOSRNet(nn.Module):
         z_dropped = self.drop(z_norm)
         
         # 粗分类 Logits
-        coarse_logits = self.coarse_head(z_dropped)
+        coarse_logits = self.coarse_head(z_dropped, labels)
         
-        # 细分类 (原型距离判定)
-        # 计算 z_dropped 与所有类原型的欧氏距离: [Batch, Num_Fine]
-        # 使用负距离作为 Logits，距离越近 Logit 越大
-        fine_logits = self.fine_head(z_dropped, labels)
 
 #----引入对比学习
         proj_feat = self.contrastive_head(z_raw)
@@ -386,8 +377,7 @@ class MultiTaskOSRNet(nn.Module):
         output = {
             'embedding': z_norm,        
             'coarse_logits': coarse_logits,
-            'fine_logits': fine_logits,
-            'prototypes': self.fine_head.weight, 
+            'prototypes': self.coarse_head.weight, 
             'z_raw': z_raw,
             'proj_feat': proj_feat  # <--- 新增：供 SupConLoss 使用
         }

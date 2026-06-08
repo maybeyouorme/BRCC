@@ -17,9 +17,8 @@ from scipy.stats import weibull_max
 # 导入你的模型和配置
 from models import MultiTaskOSRNet 
 from config import Config
-import gc 
+import gc
 from matplotlib import font_manager
-import matplotlib.pyplot as plt
 font_cn = font_manager.FontProperties(
     fname="/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
     size=12
@@ -29,91 +28,6 @@ font_cn = font_manager.FontProperties(
 # =========================================================================
 
 COARSE_LABEL_NAMES = ["Conv", "LDPC", "Turbo", "Polar", "BCH"]
-FINE_LABEL_NAMES = [
-    "Conv-A", "Conv-B", "Conv-C", 
-    "LDPC-A", "LDPC-B", "LDPC-C",
-    "Turbo-A", "Turbo-B", "Turbo-C",
-    "Polar-A", "Polar-B", "Polar-C",#TODO
-    "BCH-A", "BCH-B", "BCH-C"
-]
-'''
-COARSE_LABEL_NAMES = ["Conv", "LDPC", "Turbo", "BCH"]
-FINE_LABEL_NAMES = [
-    "Conv-A", "Conv-B", "Conv-C", 
-    "LDPC-A", "LDPC-B", "LDPC-C",
-    "Turbo-A", "Turbo-B", "Turbo-C",
-    "BCH-A", "BCH-B", "BCH-C"
-]
-'''
-# =========================================================================
-# 2. 核心预测函数
-# =========================================================================
-'''
-def get_predictions(model, loader, device, centers=None):
-    model.eval()
-    res = {
-        'embs': [], 'c_true': [], 'f_true': [], 'snr': [],
-        'c_pred': [], 'f_pred': [], 're_score': []
-    }
-
-    all_dists = []
-    all_recons = []
-
-    with torch.no_grad():
-        for x, y_c, y_f, snr in tqdm(loader, desc="Inference"):
-            x_dev = x.to(device)
-            # 输入维度 [Batch, 1, SeqLen]
-            target = x_dev.unsqueeze(1)
-            output = model(target) 
-
-            z = output['embedding']
-            # 提取重构误差 (MSE)
-            recon = output['reconstruction']
-            #mse = F.mse_loss(recon, x_dev.unsqueeze(1), reduction='none').view(x.size(0), -1).mean(dim=1)
-            re_scores = torch.mean(torch.abs(recon - target.squeeze(1)), dim=1)
-            if centers is not None:
-                dists = torch.cdist(z, centers)
-                dist_score, _ = torch.min(dists, dim=1)
-            else:
-                dist_score = torch.zeros_like(re_scores)
-            
-            all_dists.append(dist_score)
-            all_recons.append(re_scores)
-          
-
-            d_min, d_max = dist_score.min(), dist_score.max()
-            dist_norm = (dist_score - d_min) / (d_max - d_min + 1e-6)
-            r_min, r_max = re_scores.min(), re_scores.max()
-            recon_norm = (re_scores - r_min) / (r_max - r_min + 1e-6)
-            final_score = 0.5 * dist_norm + 0.5 * recon_norm
-            #final_score = dist_score + 0.1 * re_scores
-            #final_score = dist_score
-           
-            res['embs'].append(output['embedding'].cpu().numpy())
-            res['c_true'].append(y_c.numpy())
-            res['f_true'].append(y_f.numpy())
-            res['snr'].append(snr.numpy())
-            res['c_pred'].append(output['coarse_logits'].argmax(1).cpu().numpy())
-            res['f_pred'].append(output['fine_logits'].argmax(1).cpu().numpy())
-            #res['re_score'].append(final_score.cpu().numpy())
-    all_dists = torch.cat(all_dists)
-    all_recons = torch.cat(all_recons)
-    print("\n--- OSR Score Statistics ---")
-    print(f"Distance Score: Max = {all_dists.max():.6f}, Min = {all_dists.min():.6f}, Mean = {all_dists.mean():.6f}")
-    print(f"Recon Error   : Max = {all_recons.max():.6f}, Min = {all_recons.min():.6f}, Mean = {all_recons.mean():.6f}")
-    # 计算全局归一化，防止 Batch 间的偏移影响判定
-    d_min, d_max = all_dists.min(), all_dists.max()
-    r_min, r_max = all_recons.min(), all_recons.max()
-    dist_norm = (all_dists - d_min) / (d_max - d_min + 1e-6)
-    recon_norm = (all_recons - r_min) / (r_max - r_min + 1e-6)
-    final_scores = 1.0 * dist_norm + 0.0 * recon_norm
-    res['re_score'] = final_scores.cpu().numpy()
-    for k in res:
-        if k == 're_score':
-            continue
-        res[k] = np.concatenate(res[k])
-    return res
-'''
 class EVTCalibrator:
     def __init__(self, tail_size=20):
         """
@@ -173,8 +87,8 @@ class EVTCalibrator:
 def get_predictions(model, loader, device, centers=None):
     model.eval()
     res = {
-        'embs': [], 'c_true': [], 'f_true': [], 'snr': [],
-        'c_pred': [], 'f_pred': [], 'max_sim': []
+        'embs': [], 'c_true': [], 'snr': [],
+        'c_pred': [], 'max_sim': []
     }
     # 记录用于 OSR 判定的三个原始维度
     raw_metrics = {
@@ -185,19 +99,16 @@ def get_predictions(model, loader, device, centers=None):
     }
 
     with torch.no_grad():
-        for x, y_c, y_f, snr in tqdm(loader, desc="Inference"):
+        for x, y_c, snr in tqdm(loader, desc="Inference"):
             x_dev = x.to(device)
             input_data = x_dev.unsqueeze(1) if x_dev.dim() == 2 else x_dev#[B, 1, SeqLen]=[64,1,8192]
-            output = model(input_data) 
-            # --- 1. 获取粗/细预测结果 ---
+            output = model(input_data)
+            # --- 1. 获取粗预测结果 ---
             c_logits = output['coarse_logits']
-            f_logits = output['fine_logits']
 
             res['c_true'].append(y_c.numpy())#[64],作为一个元素
-            res['f_true'].append(y_f.numpy())#[64]
             res['snr'].append(snr.numpy())#[64]
             res['c_pred'].append(c_logits.argmax(1).cpu().numpy())#取最大值索引，[64]
-            res['f_pred'].append(f_logits.argmax(1).cpu().numpy())#[64]
             res['embs'].append(output['embedding'].cpu().numpy())#z_norm,[64,128]
 
             # --- 2. 原始维度提取：MSP (Maximum Softmax Probability) ---
@@ -225,7 +136,7 @@ def get_predictions(model, loader, device, centers=None):
 
             # 4. ArcMargin 核心：计算角度/余弦相似度
             z = F.normalize(output['embedding'], p=2, dim=1) # 必须 L2 归一化，[64, 128]
-            prototypes = F.normalize(model.fine_head.weight, p=2, dim=1)#[15, 128]
+            prototypes = F.normalize(model.coarse_head.weight, p=2, dim=1)#[15, 128]
             sim_matrix = torch.matmul(z, prototypes.t())#[64, 15]
             max_sim, _ = torch.max(sim_matrix, dim=1)#每个样本与所有原型的最大相似度，[64]
             res['max_sim'].append(max_sim.cpu().numpy())
@@ -256,7 +167,7 @@ def find_class_specific_thresholds(fusion_scores, c_true, c_pred, target_recall=
     unique_classes = np.unique(c_true[c_true != -1])#已知类别ID
     global_median = np.median(fusion_scores[c_true != -1])#全局已知类得分中位数
 
-    special_targets = {3: 0.85, }
+    special_targets = {3: 1,}
 
     for cls_id in unique_classes:
         # 找出验证集中：真实是该类，且预测也是该类的样本（确保建模的是“正确特征”的边界）
@@ -309,9 +220,9 @@ def diagnose_osr_scores(res, cfg):
             
     print("="*50 + "\n")
 
-def plot_results(res, cfg, threshold, coarse_map, fine_map, closed_oa, open_oa):
+def plot_results(res, cfg, threshold, coarse_map, closed_oa, open_oa):
     """
-    集成了雷达图、分组细标签曲线、OSR分布及T-SNE的综合绘图函数
+    集成了雷达图、OSR分布及T-SNE的综合绘图函数
     closed_oa: 传入计算好的闭集准确率 (0-1)
     open_oa: 传入计算好的开集准确率 (0-1)
     """
@@ -323,7 +234,6 @@ def plot_results(res, cfg, threshold, coarse_map, fine_map, closed_oa, open_oa):
     snr_vals = sorted(np.unique(res['snr'][known_mask]))
     num_snr = len(snr_vals)
     num_coarse = len(coarse_map)
-    EXTENDED_NAMES = COARSE_LABEL_NAMES + ["Background"]
     coarse_names = [COARSE_LABEL_NAMES[i] for i in range(num_coarse)]
     # =========================================================================
     # 新增 A: OSCR 曲线计算与绘制 (Open Set Classification Rate)
@@ -445,52 +355,6 @@ def plot_results(res, cfg, threshold, coarse_map, fine_map, closed_oa, open_oa):
     plt.close(); gc.collect()
 
     # =========================================================================
-    # 2. Fine-level 分组准确率曲线 (使用 FINE_LABEL_NAMES)
-    # =========================================================================
-    for c_idx in range(num_coarse):
-        c_name = COARSE_LABEL_NAMES[c_idx]
-        relevant_fine_indices = np.unique(res['f_true'][(res['c_true'] == c_idx) & known_mask])
-        
-        if len(relevant_fine_indices) == 0: continue
-
-        fine_acc_list = []
-        fine_row_names = []
-
-        plt.figure(figsize=(10, 6))
-        for f_idx in relevant_fine_indices:
-            # 直接使用预定义的细分类名称
-            f_name = FINE_LABEL_NAMES[f_idx] if f_idx < len(FINE_LABEL_NAMES) else f"F-{f_idx}"
-            f_accs = []
-            for s in snr_vals:
-                # 1. 找出在该 SNR 下，真实标签确实是 f_idx 的掩码
-                mask = (res['snr'] == s) & (res['f_true'] == f_idx)
-                
-                if mask.sum() > 0:
-                    # 2. 计算准确率： (预测值 == 真实值).sum() / 总数
-                    # 注意：这里必须是判断相等，而不是直接对 pred 取平均
-                    acc = np.mean(res['f_pred'][mask] == f_idx)
-                else:
-                    acc = np.nan # 如果没样本，设为 NaN
-                f_accs.append(acc)
-            
-            fine_acc_list.append(f_accs)
-            fine_row_names.append(f_name)
-            
-            avg_f_acc = np.nanmean(f_accs) * 100
-            plt.plot(snr_vals, f_accs, marker='s', linestyle='--', label=f"{f_name} ({avg_f_acc:.1f}%)")
-        # 保存该粗类下的 Fine CSV
-        df_fine = pd.DataFrame(fine_acc_list, index=fine_row_names, columns=[f"{s}dB" for s in snr_vals])
-        df_fine['AvgAcc'] = df_fine.mean(axis=1)
-        df_fine.to_csv(os.path.join(cfg.acc_dir, f"fine_accuracy_{c_name}.csv"), float_format="%.4f")
-
-        plt.title(f"Fine-level Accuracy: {c_name} Components", fontsize=14, fontweight='bold')
-        plt.xlabel("SNR (dB)"); plt.ylabel("Accuracy"); plt.ylim(0, 1.05); 
-        plt.grid(True, linestyle='--', alpha=0.6); plt.legend(loc='lower right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(cfg.acc_dir, f"fine_acc_{c_name}.png"), dpi=300)
-        plt.close(); gc.collect()
-
-    # =========================================================================
     # 3. OSR 分数分布图 (MSE 判别)
     # =========================================================================
     plt.figure(figsize=(10, 6))
@@ -535,9 +399,9 @@ def plot_results(res, cfg, threshold, coarse_map, fine_map, closed_oa, open_oa):
     plt.savefig(os.path.join(cfg.results_dir, "tsne_visualization.png"), dpi=300)
     plt.close(); gc.collect()
 
-def plot_all_confusion_matrices(res, cfg, threshold, coarse_names, fine_names):
+def plot_all_confusion_matrices(res, cfg, threshold, coarse_names):
     """
-    生成粗标签、细标签和开集识别的混淆矩阵 (图片+CSV)
+    生成粗标签闭集和开集识别的混淆矩阵 (图片+CSV)
     """
     cm_dir = os.path.join(cfg.results_dir, "confusion_matrices")
     os.makedirs(cm_dir, exist_ok=True)
@@ -593,33 +457,6 @@ def plot_all_confusion_matrices(res, cfg, threshold, coarse_names, fine_names):
     plt.xlabel("预测标签", fontproperties=font_cn); plt.ylabel("真实标签", fontproperties=font_cn)
     plt.savefig(os.path.join(cm_dir, "closed_confusion_matrix.png"), dpi=300, bbox_inches='tight')
     plt.close()
-    # -------------------------------------------------------------------------
-    # 3. 细标签混淆矩阵 (针对每个粗标签绘制 3x3)
-    # -------------------------------------------------------------------------
-    for c_idx, c_name in enumerate(coarse_names):
-        # 筛选属于该粗类的已知样本
-        mask = (res['c_true'] == c_idx)
-        if mask.sum() == 0: continue
-        
-        # 获取该类下存在的细标签索引
-        relevant_f_indices = sorted(np.unique(res['f_true'][mask]))
-        f_display_names = [fine_names[i] for i in relevant_f_indices]
-        
-        cm_fine = confusion_matrix(res['f_true'][mask], res['f_pred'][mask], labels=relevant_f_indices)
-        cm_fine_perc = cm_fine.astype('float') / cm_fine.sum(axis=1)[:, np.newaxis]
-        cm_fine_perc = np.nan_to_num(cm_fine_perc)
-
-        plt.figure(figsize=(6, 5))
-        sns.heatmap(cm_fine_perc, annot=True, fmt='.2f', cmap='Oranges',
-                    xticklabels=f_display_names, yticklabels=f_display_names)
-        plt.title(f"{c_name}")
-        plt.savefig(os.path.join(cm_dir, f"fine_cm_{c_name}.png"), dpi=300)
-        plt.close()
-        
-        # 保存细标签 CSV
-        pd.DataFrame(cm_fine, index=f_display_names, columns=f_display_names).to_csv(
-            os.path.join(cm_dir, f"fine_cm_{c_name}.csv"))
-
     print(f"All confusion matrices (images & CSVs) saved to: {cm_dir}")
 # =========================================================================
 # 1. 绘图增强：专门的 EVT 概率直方图
@@ -691,7 +528,7 @@ def main():
     # --- 0. 环境与模型初始化 ---
     model = MultiTaskOSRNet(cfg).to(cfg.device)
     if os.path.exists(cfg.model_save_path):
-        checkpoint = torch.load(cfg.model_save_path, map_location=cfg.device)
+        checkpoint = torch.load(cfg.model_save_path, map_location=cfg.device,weights_only=True)
         model.load_state_dict(checkpoint['model'])
         if hasattr(model, 'center_loss_fn'):
             centers = model.center_loss_fn.centers.detach()
@@ -727,7 +564,6 @@ def main():
         val_loader = DataLoader(TensorDataset(
             torch.tensor(val_data['features']).float(),
             torch.tensor(val_data['coarse_labels']).long(),
-            torch.tensor(val_data['fine_labels']).long(),
             torch.tensor(val_data['snrs']).float()
         ), batch_size=cfg.batch_size, shuffle=False)
 
@@ -780,7 +616,7 @@ def main():
 
         # 4. 锁定类特异性阈值 (针对 Recall-0.95)
         class_thresholds = find_class_specific_thresholds(
-            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=0.95
+            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=1
         )
         avg_threshold = np.mean(list(class_thresholds.values()))
         hard_upper_bound = np.percentile(fusion_scores_val, 98)
@@ -809,7 +645,6 @@ def main():
     test_loader = DataLoader(TensorDataset(
         torch.tensor(test_data['features']).float(),
         torch.tensor(test_data['coarse_labels']).long(),
-        torch.tensor(test_data['fine_labels']).long(),
         torch.tensor(test_data['snrs']).float()
     ), batch_size=cfg.batch_size, shuffle=False)
 
@@ -902,7 +737,6 @@ def main():
     print(f"   - 真正 Polar 的 Recon 均值: {recon_true_polar.mean():.4f}")
     print(f"   - 真正 Polar 的 Recon 95分位数: {np.percentile(recon_true_polar, 95):.4f}")
 # 4. 可视化对比分布
-    import matplotlib.pyplot as plt
     plt.figure(figsize=(8, 5))
     plt.hist(recon_true_polar, bins=100, alpha=0.5, label='True Polar Recon', color='blue', density=True)
     plt.hist(recon_misclassified, bins=100, alpha=0.5, label='Misclassified Unknown Recon', color='red', density=True)
@@ -926,12 +760,12 @@ def main():
     # 这里我们把测试集推理出的 test_res 传给绘图函数
     
     plot_all_confusion_matrices(
-        test_res, cfg, class_thresholds, COARSE_LABEL_NAMES, FINE_LABEL_NAMES
+        test_res, cfg, class_thresholds, COARSE_LABEL_NAMES
     )
-    
+
     plot_evt_distribution(test_res, class_thresholds, cfg)
 
-    plot_results(test_res, cfg, class_thresholds, test_data['coarse_map'], test_data['fine_map'], closed_oa, open_oa)
+    plot_results(test_res, cfg, class_thresholds, test_data['coarse_map'], closed_oa, open_oa)
 
     print(f"\n✨ 评估任务全部完成！所有图表和数据已保存至: {cfg.results_dir}")
 

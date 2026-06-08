@@ -13,7 +13,7 @@ from train import train_model
 #这是fix/known-class-number分支
 
 # 设置环境和随机种子
-os.environ["CUDA_VISIBLE_DEVICES"] = "0" 
+os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
 torch.manual_seed(42)
 np.random.seed(42)
 
@@ -171,7 +171,7 @@ def main():
     model = MultiTaskOSRNet(cfg).to(cfg.device) # <-- 实例化新模型
     
     # 打印模型结构，确认多头和AE存在
-    print(f"Model Initialized: Coarse={cfg.num_coarse_classes}, Fine={cfg.num_fine_classes}, AE={cfg.use_autoencoder}")
+    print(f"Model Initialized: Coarse={cfg.num_coarse_classes},  AE={cfg.use_autoencoder}")
 
     train_model(model, train_loader, val_known_loader, cfg)
 
