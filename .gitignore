@@ -8,3 +8,5 @@ checkpoits*/
 readme.txt
 **/checkpoits*/
 *.txt
+output/
+*.pth

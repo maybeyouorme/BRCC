@@ -167,7 +167,7 @@ def find_class_specific_thresholds(fusion_scores, c_true, c_pred, target_recall=
     unique_classes = np.unique(c_true[c_true != -1])#已知类别ID
     global_median = np.median(fusion_scores[c_true != -1])#全局已知类得分中位数
 
-    special_targets = {3: 1,}
+    special_targets = {3: 0.95,}
 
     for cls_id in unique_classes:
         # 找出验证集中：真实是该类，且预测也是该类的样本（确保建模的是“正确特征”的边界）
@@ -616,7 +616,7 @@ def main():
 
         # 4. 锁定类特异性阈值 (针对 Recall-0.95)
         class_thresholds = find_class_specific_thresholds(
-            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=1
+            fusion_scores_val, val_res['c_true'], val_res['c_pred'], target_recall=0.95
         )
         avg_threshold = np.mean(list(class_thresholds.values()))
         hard_upper_bound = np.percentile(fusion_scores_val, 98)
