@@ -10,6 +10,8 @@ from models import MultiTaskOSRNet # <-- 更改模型名称
 from dataset import ChannelCodeDataset, map_labels_to_continuous
 from train import train_model
 
+#这是fix/known-class-number分支
+
 # 设置环境和随机种子
 os.environ["CUDA_VISIBLE_DEVICES"] = "0" 
 torch.manual_seed(42)
