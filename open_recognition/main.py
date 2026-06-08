@@ -11,9 +11,6 @@ from dataset import ChannelCodeDataset, map_labels_to_continuous
 from train import train_model
 
 
-#这个是fix/known-class-number分支
-
-
 # 设置环境和随机种子
 os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
 torch.manual_seed(42)
