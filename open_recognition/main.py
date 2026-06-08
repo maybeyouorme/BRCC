@@ -10,8 +10,12 @@ from models import MultiTaskOSRNet # <-- 更改模型名称
 from dataset import ChannelCodeDataset, map_labels_to_continuous
 from train import train_model
 
+
+#这个是fix/known-class-number分支
+
+
 # 设置环境和随机种子
-os.environ["CUDA_VISIBLE_DEVICES"] = "0" 
+os.environ["CUDA_VISIBLE_DEVICES"] = "1" 
 torch.manual_seed(42)
 np.random.seed(42)
 
@@ -226,7 +230,7 @@ def main():
 
 if __name__ == "__main__":
     # 确保数据目录存在
-    os.makedirs('/data/Project_lc/Open data/matfile/12dBknown_codes', exist_ok=True)#TODO
+    os.makedirs('/data/Project_lc/Open data/matfile/12dBknown_codes', exist_ok=True)
     os.makedirs('/data/Project_lc/Open data/matfile/3unknown_codes', exist_ok=True)
     os.makedirs(os.path.dirname(EVAL_DATA_PATH), exist_ok=True)
     

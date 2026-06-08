@@ -214,8 +214,8 @@ def train_model(model, train_loader, val_loader, cfg):
                     if t_data.dim() == 3 and recon.dim() == 2:
                         t_data = t_data.squeeze(1)
                     
-                    #l_r = (F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w).mean()#[]
-                    l_r = F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w
+                    l_r = (F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w).mean()#[]
+                    #l_r = F.mse_loss(recon, t_data, reduction='none').mean(dim=1) * w
                     #TODO:我把师兄原来的第二个mean去掉了,结果有细微浮动
 
                     # 保持权重逻辑与训练集一致

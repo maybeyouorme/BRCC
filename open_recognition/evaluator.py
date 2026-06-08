@@ -178,7 +178,7 @@ def get_predictions(model, loader, device, centers=None):
     }
     # 记录用于 OSR 判定的三个原始维度
     raw_metrics = {
-        'dist': [],    # 距离得分
+        'dist': [],    # 跟原型距离
         'recon': [],   # 重构误差
         'msp': [],      # 最大分类概率 (可选辅助)
         'entropy': []
@@ -256,7 +256,7 @@ def find_class_specific_thresholds(fusion_scores, c_true, c_pred, target_recall=
     unique_classes = np.unique(c_true[c_true != -1])#已知类别ID
     global_median = np.median(fusion_scores[c_true != -1])#全局已知类得分中位数
 
-    special_targets = {3: 0.85, }
+    special_targets = {3: 0.81, }
 
     for cls_id in unique_classes:
         # 找出验证集中：真实是该类，且预测也是该类的样本（确保建模的是“正确特征”的边界）
@@ -890,7 +890,10 @@ def main():
 # 注意：请根据你的 coarse_map 确认 Polar 的索引是否为 3
     polar_idx = 3 
     misclassified_unknown_mask = (test_res['c_true'] == -1) & (open_pred == 3)
+    #误判为 Polar 的未知类样本掩码
     true_polar_mask = (test_res['c_true'] == polar_idx) & (test_res['c_pred'] == polar_idx)
+    #预测正确的 Polar 类样本掩码
+
 # 2. 提取这两类样本的重构误差
     recon_misclassified = test_res['recon'][misclassified_unknown_mask]
     recon_true_polar = test_res['recon'][true_polar_mask]

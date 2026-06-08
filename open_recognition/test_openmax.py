@@ -37,8 +37,7 @@ def run_test():
     
     # 假设我们重新加载训练特征
     # train_data = load_data_from_pickle('path_to_train_data.pkl')
-    # train_loader = DataLoader(TensorDataset(torch.tensor(train_data['features']), 
-    #                                       torch.tensor(train_data['labels'])), batch_size=64)
+    # train_loader = DataLoader(TensorDataset(torch.tensor(train_data['features']), torch.tensor(train_data['labels'])), batch_size=64)
     
     # 调用 openmax.py 里的函数
     # 注意：MultiTaskOSRNet 返回 (feat, logits_coarse, logits_fine)
