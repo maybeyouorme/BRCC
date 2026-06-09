@@ -1,5 +1,5 @@
 import matplotlib
-matplotlib.use('Agg')  # 核心指令：强制使用 Agg 后端，不弹窗
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
@@ -13,14 +13,16 @@ from torch.utils.data import TensorDataset, DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
 from thop import profile, clever_format
-# 导入模型
+import gc
+from matplotlib import font_manager
+
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
-from open_recognition.models import MultiTaskOSRNet
-from open_recognition.config import Config
-import gc
-from matplotlib import font_manager
+
+from Softmax.config import Config
+from Softmax.models import SoftmaxOSRNet
+
 font_cn = font_manager.FontProperties(
     fname="/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
     size=12
@@ -30,14 +32,13 @@ COARSE_LABEL_NAMES = ["Conv", "LDPC", "Turbo", "Polar", "BCH"]
 
 
 def get_predictions(model, loader, device):
+    """推理函数，基于 SoftmaxOSRNet (只有 embedding + logits)"""
     model.eval()
     res = {
         'embs': [], 'c_true': [], 'snr': [],
-        'c_pred': [], 'max_sim': []
+        'c_pred': [], 'max_sim': [], 'logits': []
     }
     raw_metrics = {
-        'dist': [],
-        'recon': [],
         'msp': [],
         'entropy': []
     }
@@ -48,15 +49,16 @@ def get_predictions(model, loader, device):
             input_data = x_dev.unsqueeze(1) if x_dev.dim() == 2 else x_dev  # [B, 1, SeqLen]
             output = model(input_data)
 
-            c_logits = output['coarse_logits']
+            logits = output['logits']  # 标准 Softmax 原始 logits
 
+            res['logits'].append(logits.cpu().numpy())
             res['c_true'].append(y_c.numpy())
             res['snr'].append(snr.numpy())
-            res['c_pred'].append(c_logits.argmax(1).cpu().numpy())
+            res['c_pred'].append(logits.argmax(1).cpu().numpy())
             res['embs'].append(output['embedding'].cpu().numpy())
 
             # MSP (Maximum Softmax Probability)
-            probs = torch.softmax(c_logits / 32.0, dim=1)
+            probs = torch.softmax(logits, dim=1)
             msp, _ = torch.max(probs, dim=1)
             raw_metrics['msp'].append(msp.cpu().numpy())
 
@@ -64,23 +66,12 @@ def get_predictions(model, loader, device):
             ent = -torch.sum(probs * torch.log(probs + 1e-10), dim=1)
             raw_metrics['entropy'].append((ent / np.log(5)).cpu().numpy())
 
-            # 重构误差
-            recon = output['reconstruction']
-            target = output['target_signal']
-            if target.dim() == 3: target = target.squeeze(1)
-            if recon.dim() == 3: recon = recon.squeeze(1)
-
-            cos_sim = F.cosine_similarity(recon, target, dim=1)
-            r_err = torch.abs(torch.mean(torch.abs(recon - target), dim=1) / (cos_sim + 1e-8))
-            raw_metrics['recon'].append(r_err.cpu().numpy())
-
-            # 余弦相似度
+            # 余弦相似度到各分类原型 (classifier weight)
             z = F.normalize(output['embedding'], p=2, dim=1)
-            prototypes = F.normalize(model.coarse_head.weight, p=2, dim=1)
+            prototypes = F.normalize(model.classifier.weight, p=2, dim=1)
             sim_matrix = torch.matmul(z, prototypes.t())
             max_sim, _ = torch.max(sim_matrix, dim=1)
             res['max_sim'].append(max_sim.cpu().numpy())
-            raw_metrics['dist'].append((1.0 - max_sim).cpu().numpy())
 
     for k in res:
         res[k] = np.concatenate(res[k])
@@ -89,15 +80,45 @@ def get_predictions(model, loader, device):
 
     print(f"Total Background samples in results: {np.sum(res['c_true'] == -1)}")
     res.update(raw_metrics)
-    res['re_score_raw'] = res['recon']
     return res
 
 
-# =========================================================================
-# 绘图函数
-# =========================================================================
+def find_class_msp_thresholds(val_res, percentile=5.0):
+    """
+    在验证集上为每个已知类寻找 MSP 置信度阈值
+
+    对每个已知类，收集该类所有验证样本的 MSP 值，然后取指定的
+    百分位数作为该类的 MSP 阈值。例如 percentile=5 表示该类的
+    95% 的样本 MSP 高于此阈值。
+
+    Args:
+        val_res: get_predictions 的返回结果字典（需包含 'c_true', 'msp'）
+        percentile: 百分位数 (0-100)，取该百分位的 MSP 作为阈值
+                    较小值 → 阈值更低 → 更多样本被接受为已知类
+                    较大值 → 阈值更高 → 更严格，更多样本被拒绝为未知类
+
+    Returns:
+        dict: {class_id: msp_threshold} 每类的 MSP 阈值
+    """
+    known_mask = val_res['c_true'] != -1
+    known_classes = sorted(int(c) for c in np.unique(val_res['c_true'][known_mask]))
+
+    thresholds = {}
+    for cls in known_classes:
+        cls_mask = (val_res['c_true'] == cls)
+        cls_msp = val_res['msp'][cls_mask]
+
+        if len(cls_msp) > 0:
+            thr = float(np.percentile(cls_msp, percentile))
+            thresholds[cls] = thr
+        else:
+            thresholds[cls] = 0.05  # fallback
+
+    return thresholds
+
 
 def plot_results(res, results_dir, acc_dir, threshold, coarse_map, closed_oa, open_oa):
+    """绘图函数：OSCR、ROC、雷达图、t-SNE 等"""
     os.makedirs(results_dir, exist_ok=True)
     os.makedirs(acc_dir, exist_ok=True)
 
@@ -167,7 +188,6 @@ def plot_results(res, results_dir, acc_dir, threshold, coarse_map, closed_oa, op
             mask = mask_s & (res['c_true'] == i)
             coarse_acc_matrix[i, j] = np.mean(res['c_pred'][mask] == i) if mask.sum() > 0 else np.nan
 
-    coarse_names = [COARSE_LABEL_NAMES[i] for i in range(num_coarse)]
     df_coarse = pd.DataFrame(coarse_acc_matrix, index=coarse_names, columns=[f"{s}dB" for s in snr_vals])
     df_coarse['AvgAcc'] = df_coarse.mean(axis=1)
     coarse_csv_path = os.path.join(acc_dir, "coarse_accuracy_data.csv")
@@ -191,7 +211,7 @@ def plot_results(res, results_dir, acc_dir, threshold, coarse_map, closed_oa, op
     ax.set_xticklabels([f"{s:.0f}dB" for s in snr_vals], fontsize=10, fontweight='bold')
     ax.set_ylim(0, 1.05)
     ax.set_title(f"Coarse Accuracy Radar Chart\n(Closed OA: {closed_oa*100:.2f}%)", pad=30, fontsize=14, fontweight='bold')
-    ax.legend(loc='upper right',bbox_to_anchor=(1.3, 1.1), borderaxespad=0.)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1), borderaxespad=0.)
     plt.tight_layout()
     plt.savefig(os.path.join(acc_dir, "coarse_accuracy_radar.png"), dpi=300)
     plt.close(); gc.collect()
@@ -247,6 +267,7 @@ def plot_results(res, results_dir, acc_dir, threshold, coarse_map, closed_oa, op
 
 
 def plot_all_confusion_matrices(res, results_dir, threshold, coarse_names):
+    """绘制混淆矩阵"""
     cm_dir = os.path.join(results_dir, "confusion_matrices")
     os.makedirs(cm_dir, exist_ok=True)
 
@@ -257,7 +278,7 @@ def plot_all_confusion_matrices(res, results_dir, threshold, coarse_names):
         if res['final_score'][i] > thr:
             open_pred[i] = -1
 
-    # --- 开集混淆矩阵 (6x6) ---
+    # --- 开集混淆矩阵 ---
     osr_labels = list(range(len(coarse_names))) + [-1]
     osr_display_names = coarse_names + ["Unknown"]
     cm_osr = confusion_matrix(res['c_true'], open_pred, labels=osr_labels)
@@ -275,7 +296,7 @@ def plot_all_confusion_matrices(res, results_dir, threshold, coarse_names):
     pd.DataFrame(cm_osr, index=osr_display_names, columns=osr_display_names).to_csv(
         os.path.join(cm_dir, "osr_confusion_matrix.csv"))
 
-    # --- 闭集混淆矩阵 (5x5) ---
+    # --- 闭集混淆矩阵 ---
     known_mask = res['c_true'] != -1
     true_labels_closed = res['c_true'][known_mask]
     pred_labels_closed = res['c_pred'][known_mask]
@@ -295,22 +316,20 @@ def plot_all_confusion_matrices(res, results_dir, threshold, coarse_names):
     print(f"All confusion matrices saved to: {cm_dir}")
 
 
-# =========================================================================
-# 主程序
-# =========================================================================
-
-def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', batch_size=64, msp_threshold=0.8,cfg=None):
+def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', batch_size=64, msp_threshold=0.8, cfg=None):
     """
     基于 MSP (Maximum Softmax Probability) 的开集识别评估
+    使用验证集为每个已知类寻找独立的置信度阈值。
 
     参数:
         model_path:     模型权重文件路径 (.pth)
         val_data_path:  验证集 pickle 文件路径 (_val.pkl)
         test_data_path: 测试集 pickle 文件路径 (_test.pkl)
         save_dir:       结果保存目录
-        device:         计算设备 ('cuda' 或 'cpu')
+        device:         计算设备
         batch_size:     推理批次大小
-        msp_threshold:  MSP 阈值，最大 softmax 概率低于此值时判为未知类
+        msp_threshold:  全局 MSP 阈值兜底（验证集不可用时使用）
+        cfg:            配置对象（需包含 osr_confidence_level 控制每类阈值的百分位数）
     """
     results_dir = os.path.join(save_dir, "results")
     acc_dir = os.path.join(save_dir, "accuracy_tables")
@@ -319,8 +338,7 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
 
     # --- 0. 加载模型 ---
     device = torch.device(device)
-    model = MultiTaskOSRNet(cfg)  # 默认构造，权重通过 load_state_dict 加载
-    model = model.to(device)
+    model = SoftmaxOSRNet(cfg).to(device)
 
     if not os.path.exists(model_path):
         print(f"❌ 错误: 未找到模型文件 {model_path}")
@@ -328,14 +346,6 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint['model'])
-    # 尝试加载 centers（如果存在）
-    centers = None
-    if 'center_loss' in checkpoint:
-        centers = checkpoint['center_loss']['centers'].to(device)
-        print("✅ 成功加载中心点")
-    elif hasattr(model, 'center_loss_fn'):
-        centers = model.center_loss_fn.centers.detach()
-        print("✅ 成功从模型中提取 Center Loss 聚类中心")
     print(f"✅ 成功加载模型权重: {model_path}")
 
     # 打印模型复杂度
@@ -345,11 +355,16 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
     print(f"📊 模型统计: 参数量={params}, 计算量={flops}")
 
     # =========================================================================
-    # PHASE 1: 验证集 - 确认 MSP 阈值
+    # PHASE 1: 验证集 - 寻找每类的 MSP 阈值
     # =========================================================================
-    print(f"\n🚀 [PHASE 1] 验证集 MSP 阈值检查...")
+    print(f"\n🚀 [PHASE 1] 验证集 - 计算每类 MSP 阈值...")
+
+    # 初始化全局默认阈值作为兜底（当验证集不可用时使用）
+    class_thresholds = {i: msp_threshold for i in range(len(COARSE_LABEL_NAMES))}
+
     if not os.path.exists(val_data_path):
         print(f"❌ 错误: 未找到验证集文件 {val_data_path}")
+        print(f"⚠️  将使用全局 MSP 阈值: {msp_threshold}")
     else:
         with open(val_data_path, 'rb') as f:
             val_data = pickle.load(f)
@@ -362,17 +377,26 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
         ), batch_size=batch_size, shuffle=True)
 
         val_res = get_predictions(model, val_loader, device)
-        set1 = set(val_res['msp'])
-        #print(f"所有概率取值：{set1}")
         known_mask_v = val_res['c_true'] != -1
         if known_mask_v.any():
             print(f"🔍 [验证集] 已知类 MSP 均值: {val_res['msp'][known_mask_v].mean():.4f}")
 
-    # 设定阈值
-    class_thresholds = {i: 1.0 - msp_threshold for i in range(len(COARSE_LABEL_NAMES))}
-    avg_threshold = 1.0 - msp_threshold
-    print(f"🎯 MSP 阈值已锁定: p_max < {msp_threshold} 判为未知类")
-    print(f"   (等价 final_score = 1 - MSP > {avg_threshold:.4f})")
+            # 根据置信度水平计算百分位数，为每个已知类寻找 MSP 阈值
+            confidence_level = getattr(cfg, 'osr_confidence_level', 0.95)
+            confidence_level_pct = (1 - confidence_level) * 100
+            class_thresholds = find_class_msp_thresholds(val_res, percentile=confidence_level_pct)
+
+            for cls in sorted(class_thresholds.keys()):
+                cls_name = COARSE_LABEL_NAMES[cls] if cls < len(COARSE_LABEL_NAMES) else f"Class-{cls}"
+                thr = class_thresholds[cls]
+                cls_msp = val_res['msp'][val_res['c_true'] == cls]
+                print(f"   {cls_name}: threshold={thr:.4f} (mean MSP={cls_msp.mean():.4f}, "
+                      f"min={cls_msp.min():.4f}, p5={np.percentile(cls_msp, 5):.4f}, "
+                      f"p10={np.percentile(cls_msp, 10):.4f})")
+        else:
+            print(f"⚠️  验证集无已知类样本，使用全局 MSP 阈值: {msp_threshold}")
+
+    print(f"📊 最终使用的 MSP 阈值范围: {min(class_thresholds.values()):.4f} ~ {max(class_thresholds.values()):.4f}")
 
     # =========================================================================
     # PHASE 2: 测试集评估
@@ -400,7 +424,7 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
     # 使用 MSP 计算 final_score：1 - MSP，越大越不确定
     test_res['final_score'] = 1.0 - test_res['msp']
 
-    # --- 打印 MSP 详细分布 ---
+    # --- 打印 MSP 分布 ---
     print("\n📊 [MSP 分布诊断]")
     for name, mask in [("已知类", known_mask_test), ("未知类", unknown_mask_test)]:
         if mask.any():
@@ -409,22 +433,17 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
                   f"min={msp_vals.min():.4f}, "
                   f"med={np.median(msp_vals):.4f}, "
                   f"p5={np.percentile(msp_vals, 5):.4f}")
-            for thr in [0.95, 0.9, 0.8, 0.7, 0.6, 0.5, 0.32]:
+            for thr in [0.95, 0.9, 0.8, 0.7, 0.6, 0.5]:
                 pct = (msp_vals < thr).mean() * 100
                 print(f"       MSP < {thr}: {pct:.1f}%")
-    print(f"\n📊 [final_score = 1-MSP 分布]")
-    for name, mask in [("已知类", known_mask_test), ("未知类", unknown_mask_test)]:
-        if mask.any():
-            fs = test_res['final_score'][mask]
-            print(f"   {name}: mean={fs.mean():.4f}, min={fs.min():.4f}, max={fs.max():.4f}, "
-                  f"p95={np.percentile(fs, 95):.4f}")
-    print(f"   [阈值对比] avg_threshold(current)={avg_threshold:.4f} 等价于 MSP < {msp_threshold}")
-    print(f"   [提示] 要使当前阈值生效，需要未知类的 MSP 低于 {msp_threshold}")
 
-    # 应用判定：MSP < msp_threshold 判为未知类
+    # 判定：对每个样本，根据其预测类的 MSP 阈值判断是否为未知类
     open_pred = test_res['c_pred'].copy()
+    avg_threshold = np.mean(list(class_thresholds.values()))
     for i in range(len(open_pred)):
-        if test_res['final_score'][i] > avg_threshold:
+        pred_cls = open_pred[i]
+        thr = class_thresholds.get(pred_cls, avg_threshold)
+        if test_res['msp'][i] < thr:
             open_pred[i] = -1
 
     # --- 计算指标 ---
@@ -444,7 +463,9 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
         print(f"   - 类别 {i} ({COARSE_LABEL_NAMES[i]}) 召回率: {per_class_recall[i]*100:.2f}%")
 
     print(f"\n📊 [MSP 开集识别评测结果报告]")
-    print(f"   - MSP 判定阈值: p_max < {msp_threshold}")
+    for cls in sorted(class_thresholds.keys()):
+        cls_name = COARSE_LABEL_NAMES[cls] if cls < len(COARSE_LABEL_NAMES) else f"Class-{cls}"
+        print(f"   - 类别 {cls_name} MSP 阈值: {class_thresholds[cls]:.4f}")
     print(f"   - 闭集分类准确率 (Known): {closed_oa*100:.2f}%")
     print(f"   - 开集识别准确率 (Total): {open_oa*100:.2f}%")
 
@@ -452,23 +473,25 @@ def main(model_path, val_data_path, test_data_path, save_dir, device='cuda', bat
     test_res['c_pred_original'] = test_res['c_pred'].copy()
     test_res['c_pred'] = open_pred
 
-    # --- 绘图 ---
-    plot_all_confusion_matrices(test_res, results_dir, class_thresholds, COARSE_LABEL_NAMES)
-    plot_results(test_res, results_dir, acc_dir, class_thresholds, test_data['coarse_map'], closed_oa, open_oa)
+    # --- 绘图（将 MSP 阈值转为 final_score 阈值：final_score = 1 - MSP） ---
+    plot_thresholds = {cls: 1.0 - thr for cls, thr in class_thresholds.items()}
+    plot_all_confusion_matrices(test_res, results_dir, plot_thresholds, COARSE_LABEL_NAMES)
+    plot_results(test_res, results_dir, acc_dir, plot_thresholds, test_data['coarse_map'], closed_oa, open_oa)
 
     print(f"\n✨ 评估完成！结果已保存至: {save_dir}")
 
 
 if __name__ == "__main__":
-    # ====== 用户在此配置路径 ======
     cfg = Config()
+    print(f"📋 OSR 配置: 置信度水平 = {cfg.osr_confidence_level:.0%}, "
+          f"(对应每类阈值 = {(1-cfg.osr_confidence_level)*100:.0f} 百分位数)")
     main(
-        model_path="../open_recognition/checkpoits1/best_model.pth",
+        model_path="./checkpoints1/best_model.pth",
         val_data_path="/data/project_lyb/Open data/val_data_for_eval_val.pkl",
         test_data_path="/data/project_lyb/Open data/val_data_for_eval_test.pkl",
         save_dir="./output",
         device="cuda",
         batch_size=64,
-        msp_threshold=0.42,
+        msp_threshold=0.5,
         cfg=cfg
     )

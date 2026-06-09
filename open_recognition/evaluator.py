@@ -240,9 +240,9 @@ def plot_results(res, cfg, threshold, coarse_map, closed_oa, open_oa):
     # =========================================================================
     x1 = res['final_score'][known_mask]   # 已知类分数
     x2 = res['final_score'][~known_mask]  # 未知类分数
-    pred = res['c_pred'][known_mask]
-    labels = res['c_true'][known_mask]
-    correct = (pred == labels)
+    pred = res['c_pred'][known_mask]        # 已知类的预测标签
+    labels = res['c_true'][known_mask]      # 已知类的真实标签
+    correct = (pred == labels)       # 已知类中预测正确的样本标记为 True，其他为 False 
 
     scores_all = np.concatenate([x1, x2])
     # 标记：已知且正确为1，其他为0
@@ -251,13 +251,15 @@ def plot_results(res, cfg, threshold, coarse_map, closed_oa, open_oa):
     gt_unknown = np.concatenate([np.zeros(len(x1)), np.ones(len(x2))])
 
     # 3. 按分数从小到大排序 
-    indices = np.argsort(scores_all)
-    gt_correct = gt_correct[indices]
+    indices = np.argsort(scores_all)#返回升序排序后的索引
+    #scores_all = [0.6, 0.1, 0.9, 0.4]--> indices = [1, 3, 0, 2]
+    #indices 告诉我们：按分数从小到大，应该取第几个元素。
+    gt_correct = gt_correct[indices] #对应排序后的标签    
     gt_unknown = gt_unknown[indices]
 
     # 4. 随着阈值逐渐增大（放行更多样本为已知），累计计算
-    num_k = len(x1)
-    num_u = len(x2)
+    num_k = len(x1) #已知类样本数
+    num_u = len(x2) #未知类样本数
 
     # 这里的阈值移动是从“只接受最确定的样本”到“接受所有样本”
     ccr = np.cumsum(gt_correct) / num_k
@@ -380,7 +382,7 @@ def plot_results(res, cfg, threshold, coarse_map, closed_oa, open_oa):
     max_pts = 3000
     indices = np.random.choice(len(res['embs']), min(max_pts, len(res['embs'])), replace=False)
     embs_norm = res['embs'][indices] / (np.linalg.norm(res['embs'][indices], axis=1, keepdims=True) + 1e-9)
-    low_dim = tsne.fit_transform(embs_norm)
+    low_dim = tsne.fit_transform(embs_norm) #二维数组
     subset_labels = res['c_true'][indices]
 
     plt.figure(figsize=(10, 8))

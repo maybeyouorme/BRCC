@@ -72,7 +72,7 @@ def main():
     # --- 1. 定义数据路径 ---
     base_data_dir = "/data/Project_lc/Open data/matfile"#TODO
     known_data_dir = os.path.join(base_data_dir, "12dBknown_codes")
-    unknown_data_dir = os.path.join(base_data_dir, "1unknown_codes")
+    unknown_data_dir = os.path.join(base_data_dir, "3unknown_codes")
     
     # 1.1 加载所有已知码和未知码数据 (新增 fine_full)
     print("\n--- Loading Known Codes ---")

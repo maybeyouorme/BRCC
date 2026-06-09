@@ -6,7 +6,7 @@ import os
 class Config:
     def __init__(self):
         # 硬件设置
-        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.gpu_id = "0"
         
         # --- 核心任务参数 (MT-OSR) ---
@@ -57,8 +57,10 @@ class Config:
 
         self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits1"
-        #1:修改损失函数,去掉loss_fine：
+        self.save_dir = "./checkpoits3"
+        #1：1个未知类
+        #2：2个未知类 
+        #3: 3个未知类
         self.model_save_name = "best_model.pth"
         self.model_save_path = os.path.join(self.save_dir, self.model_save_name)
 
