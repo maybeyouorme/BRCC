@@ -18,11 +18,6 @@ from scipy.stats import weibull_max
 from models import MultiTaskOSRNet 
 from config import Config
 import gc
-from matplotlib import font_manager
-font_cn = font_manager.FontProperties(
-    fname="/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-    size=12
-)
 # =========================================================================
 # 1. 标签映射与名称定义
 # =========================================================================
@@ -276,11 +271,9 @@ def plot_results(res, cfg, threshold, coarse_map, closed_oa, open_oa):
     plt.plot(fpr, ccr, label=f'OSCR (AUC={np.trapz(ccr, fpr):.4f})', color='darkorange', lw=2)
     plt.plot([0, 1], [0, 1], color='navy', lw=1, linestyle='--')
     plt.xlim([0.0, 1.0]); plt.ylim([0.0, 1.05])
-    #plt.xlabel('False Positive Rate (Unknowns accepted)')
-    #plt.ylabel('CCR (Knowns correctly classified)')
-    plt.xlabel("FPR（未知类被接受）", fontproperties=font_cn)
-    plt.ylabel("CCR (已知类正确识别率）", fontproperties=font_cn)
-    plt.title('OSCR 曲线', fontproperties=font_cn)
+    plt.xlabel('FPR (Unknown accepted)')
+    plt.ylabel('CCR (Known correctly classified)')
+    plt.title('OSCR Curve')
     plt.legend(loc="lower right"); plt.grid(alpha=0.3)
     plt.savefig(os.path.join(cfg.results_dir, "oscr_curve.png"), dpi=300); plt.close(); gc.collect()
 
@@ -426,8 +419,8 @@ def plot_all_confusion_matrices(res, cfg, threshold, coarse_names):
     plt.figure(figsize=(10, 8))
     sns.heatmap(cm_osr_perc, annot=True, fmt='.2f', cmap='Blues',
                 xticklabels=osr_display_names, yticklabels=osr_display_names)
-    plt.title("OSR 混淆矩阵", fontproperties=font_cn)
-    plt.xlabel("预测标签", fontproperties=font_cn); plt.ylabel("真实标签", fontproperties=font_cn)
+    plt.title("OSR Confusion Matrix")
+    plt.xlabel("Predicted Label"); plt.ylabel("True Label")
     plt.savefig(os.path.join(cm_dir, "osr_confusion_matrix.png"), dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -449,8 +442,8 @@ def plot_all_confusion_matrices(res, cfg, threshold, coarse_names):
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm_closed_perc, annot=True, fmt='.2f', cmap='Greens', # 换个颜色区分
                 xticklabels=closed_display_names, yticklabels=closed_display_names)
-    plt.title("闭集混淆矩阵", fontproperties=font_cn)
-    plt.xlabel("预测标签", fontproperties=font_cn); plt.ylabel("真实标签", fontproperties=font_cn)
+    plt.title("Closed-set Confusion Matrix")
+    plt.xlabel("Predicted Label"); plt.ylabel("True Label")
     plt.savefig(os.path.join(cm_dir, "closed_confusion_matrix.png"), dpi=300, bbox_inches='tight')
     plt.close()
     print(f"All confusion matrices (images & CSVs) saved to: {cm_dir}")

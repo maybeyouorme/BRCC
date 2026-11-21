@@ -58,7 +58,7 @@ class Config:
 
         self.lambda_contrast = 2.5  #监督对比学习损失权重
         # --- 路径 ---
-        self.save_dir = "./checkpoits4"
+        self.save_dir = "./checkpoits1"
         #1：1个未知类
         #2：2个未知类 
         #3: 3个未知类

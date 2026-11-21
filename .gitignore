@@ -17,3 +17,8 @@ output/
 *.pt
 ARPL-master/
 MGPL-main/
+*.docx
+gen_docx.py
+gen_full_paper.py
+gen_full_paper.py.bak
+gen_full_paper.py.bak2
